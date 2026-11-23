@@ -7,11 +7,30 @@
 // depósito se enseñan por separado (son problemas distintos), y el botón de
 // cerrar se niega mientras queden líneas sin vincular, salvo que alguien con
 // permiso decida cerrarlo a conciencia.
+//
+// Mundo de operación (DESIGN.md, 22-11-2026): título de 28 px, tarjetas de
+// sección con su cabecera, la tabla con hairlines, chapas de 4 px y el marco de
+// cifras que separa lo reportado de lo que valida Kapta (MOM §14).
 
-import { useRef, useState, useTransition } from "react";
+import { useId, useRef, useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { OrderLink } from "@/components/order-link";
-import { Card, EmptyState, Section, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
+import { cn, TABLE_WRAP_FROM } from "@/components/ui";
+import {
+  Badge,
+  Banner,
+  CARD_ZONE,
+  CHECKBOX,
+  FIELD,
+  FIELD_BOX,
+  OpsButton,
+  SECTION_CARD,
+  SectionHead,
+  type BadgeTone,
+} from "@/components/ops-ui";
+import { Field } from "@/components/settings-ui";
+import { IconAlert } from "@/components/icons";
 import { VERDICT_LABELS, type ReconciledSettlement, type SettlementVerdict } from "@/lib/settlements";
 import type { RiderPayout } from "@/lib/settlements";
 import type { RiderRow, SettlementDetail, SettlementRow } from "@/lib/settlements-access";
@@ -35,17 +54,25 @@ interface StoreOpt {
 const money = (n: number | null | undefined) =>
   n === null || n === undefined ? "—" : `S/ ${n.toFixed(2)}`;
 
-const STATUS_STYLE: Record<string, string> = {
-  borrador: "bg-slate-100 text-slate-600",
-  cuadrada: "bg-emerald-50 text-emerald-700",
-  con_descuadre: "bg-amber-50 text-amber-700",
-  cerrada: "bg-slate-800 text-white",
+// Cerrada es un estado final, no un aviso: chapa neutra, como en Compras.
+const STATUS_TONE: Record<string, BadgeTone> = {
+  borrador: "neutral",
+  cuadrada: "ok",
+  con_descuadre: "warn",
+  cerrada: "neutral",
 };
 const STATUS_LABEL: Record<string, string> = {
   borrador: "Borrador",
   cuadrada: "Sin diferencias",
   con_descuadre: "Revisión necesaria",
   cerrada: "Cerrada",
+};
+
+// De dónde salió el lote. Sin emoji: el mundo de operación no decora.
+const SOURCE_LABEL: Record<string, string> = {
+  foto: "Foto",
+  hoja: "Hoja",
+  ruta: "Ruta",
 };
 
 const SETTLEMENT_COURIERS = [
@@ -61,14 +88,17 @@ function courierLabel(id: string | null | undefined): string | null {
   return SETTLEMENT_COURIERS.find((courier) => courier.id === id.toLowerCase())?.label ?? id;
 }
 
-const VERDICT_STYLE: Record<SettlementVerdict, string> = {
-  conforme: "bg-emerald-50 text-emerald-700",
-  cobro_de_mas: "bg-sky-50 text-sky-700",
-  cobro_de_menos: "bg-amber-50 text-amber-700",
-  entregado_sin_cobro: "bg-red-50 text-red-700",
-  cobro_sin_entrega: "bg-red-50 text-red-700",
-  sin_pedido: "bg-slate-100 text-slate-600",
+const VERDICT_TONE: Record<SettlementVerdict, BadgeTone> = {
+  conforme: "ok",
+  cobro_de_mas: "info",
+  cobro_de_menos: "warn",
+  entregado_sin_cobro: "crit",
+  cobro_sin_entrega: "crit",
+  sin_pedido: "neutral",
 };
+
+/** Celda de encabezado de las tablas de esta pantalla. */
+const TH = "border-y border-line bg-white px-3 py-2 text-left text-xs font-medium text-ink-600";
 
 export function SettlementsBoard({
   stores,
@@ -96,87 +126,118 @@ export function SettlementsBoard({
     settlement.rider_name_raw ??
     "Sin responsable";
 
+  const hrefFor = (s: SettlementRow) =>
+    detail?.settlement.id === s.id ? "/dashboard/liquidaciones" : `/dashboard/liquidaciones?id=${s.id}`;
+
   return (
-    <div className="space-y-6">
-      <Section title="Liquidaciones de couriers y motorizados">
-        <p className="text-sm text-slate-500">
-          Sube una <strong className="font-medium text-slate-700">foto</strong> o un{" "}
-          <strong className="font-medium text-slate-700">Excel/CSV</strong>. Kapta conserva lo
-          reportado y lo compara con el Master. Las diferencias quedan visibles y toda corrección
-          manual guarda historial.
+    <div className="mx-auto max-w-[76rem] space-y-4">
+      <header>
+        <h1 className="text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">Liquidaciones</h1>
+        <p className="mt-1 max-w-[68ch] text-sm text-ink-500">
+          De couriers y motorizados. Sube una foto o un Excel/CSV: Kapta conserva lo reportado y lo
+          compara con el Master. Las diferencias quedan visibles y toda corrección manual guarda
+          historial.
         </p>
-      </Section>
+      </header>
 
       {msg && (
-        <Card className="border-brand-200 bg-brand-50 p-3 text-sm text-brand-800">{msg}</Card>
+        <Banner tone="info" role="status">
+          {msg}
+        </Banner>
       )}
 
       {canEdit && <UploadPanel stores={stores} riders={riders} onDone={setMsg} />}
 
-      <Card className="p-0">
-        <div className={TABLE_WRAP_FROM[1060]}>
-          <table className="w-full min-w-[720px] text-sm">
-            <thead className={cn(STICKY_HEAD, "bg-slate-50 text-left text-xs text-slate-500")}>
-              <tr>
-                <th className="px-4 py-2.5 font-medium">Fecha</th>
-                <th className="px-4 py-2.5 font-medium">Responsable del lote</th>
-                <th className="px-4 py-2.5 font-medium">Origen</th>
-                <th className="px-4 py-2.5 font-medium">Depósito registrado</th>
-                <th className="px-4 py-2.5 font-medium">Pago motorizado</th>
-                <th className="px-4 py-2.5 font-medium">Estado</th>
-              </tr>
-            </thead>
-            <tbody>
-              {settlements.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="px-4 py-10">
-                    <EmptyState title="Todavía no hay liquidaciones">
-                      Sube la primera hoja arriba.
-                    </EmptyState>
-                  </td>
-                </tr>
-              )}
+      <section aria-label="Liquidaciones cargadas" className="overflow-hidden rounded-lg bg-white shadow-control ring-1 ring-line">
+        {settlements.length === 0 ? (
+          <p className="px-4 py-12 text-center text-sm text-ink-500">
+            Todavía no hay liquidaciones: sube la primera hoja arriba.
+          </p>
+        ) : (
+          <>
+            {/* Teléfono: cada lote es una fila de lista, sin desplazamiento horizontal. */}
+            <ul className="divide-y divide-line md:hidden">
               {settlements.map((s) => {
                 const open = detail?.settlement.id === s.id;
                 return (
-                  <tr
-                    key={s.id}
-                    onClick={() =>
-                      router.push(open ? "/dashboard/liquidaciones" : `/dashboard/liquidaciones?id=${s.id}`)
-                    }
-                    className={cn(
-                      "cursor-pointer border-b border-slate-100 hover:bg-slate-50",
-                      open && "bg-slate-50",
-                    )}
-                  >
-                    <td className="px-4 py-2.5 font-medium text-slate-800">{s.settlement_date}</td>
-                    <td className="px-4 py-2.5 text-slate-700">
-                      {responsibilityName(s)}
-                    </td>
-                    <td className="px-4 py-2.5 text-slate-500">
-                      {s.source === "foto" ? "📷 Foto" : s.source === "hoja" ? "📄 Hoja" : "✍️ Manual"}
-                    </td>
-                    <td className="px-4 py-2.5 text-slate-700">
-                      {money(Number(s.declared_cash) + Number(s.declared_yape))}
-                    </td>
-                    <td className="px-4 py-2.5 text-slate-700">{money(s.payout_amount)}</td>
-                    <td className="px-4 py-2.5">
-                      <span
-                        className={cn(
-                          "rounded-full px-2 py-0.5 text-xs font-medium",
-                          STATUS_STYLE[s.status] ?? "bg-slate-100 text-slate-600",
-                        )}
-                      >
-                        {STATUS_LABEL[s.status] ?? s.status}
+                  <li key={s.id}>
+                    <Link
+                      href={hrefFor(s)}
+                      aria-current={open ? "true" : undefined}
+                      className={cn("block px-4 py-3 hover:bg-wash", open && "bg-brand-100/70")}
+                    >
+                      <span className="flex items-center justify-between gap-3">
+                        <span className={cn("text-sm font-medium tabular-nums", open ? "text-brand-700" : "text-ink-900")}>
+                          {s.settlement_date}
+                        </span>
+                        <Badge tone={STATUS_TONE[s.status] ?? "neutral"}>{STATUS_LABEL[s.status] ?? s.status}</Badge>
                       </span>
-                    </td>
-                  </tr>
+                      <span className={cn("mt-0.5 block text-[13px]", open ? "text-ink-600" : "text-ink-500")}>
+                        {responsibilityName(s)} · {SOURCE_LABEL[s.source] ?? "Manual"}
+                      </span>
+                      <span className={cn("block text-[13px] tabular-nums", open ? "text-ink-600" : "text-ink-500")}>
+                        Depósito {money(Number(s.declared_cash) + Number(s.declared_yape))} · Pago {money(s.payout_amount)}
+                      </span>
+                    </Link>
+                  </li>
                 );
               })}
-            </tbody>
-          </table>
-        </div>
-      </Card>
+            </ul>
+
+            <div className={cn("hidden md:block", TABLE_WRAP_FROM[1060])}>
+              <table className="w-full min-w-[720px] text-sm">
+                <thead>
+                  <tr>
+                    <th className={cn(TH, "sticky top-0 z-[1] border-t-0 pl-4")}>Fecha</th>
+                    <th className={cn(TH, "sticky top-0 z-[1] border-t-0")}>Responsable del lote</th>
+                    <th className={cn(TH, "sticky top-0 z-[1] border-t-0")}>Origen</th>
+                    <th className={cn(TH, "sticky top-0 z-[1] border-t-0 text-right")}>Depósito registrado</th>
+                    <th className={cn(TH, "sticky top-0 z-[1] border-t-0 text-right")}>Pago motorizado</th>
+                    <th className={cn(TH, "sticky top-0 z-[1] border-t-0 pr-4")}>Estado</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {settlements.map((s) => {
+                    const open = detail?.settlement.id === s.id;
+                    const support = open ? "text-ink-600" : "text-ink-500";
+                    return (
+                      <tr
+                        key={s.id}
+                        onClick={() => router.push(hrefFor(s))}
+                        className={cn(
+                          "cursor-pointer border-b border-line last:border-0",
+                          open ? "bg-brand-100/70" : "hover:bg-wash",
+                        )}
+                      >
+                        <td className="py-2.5 pl-4 pr-3">
+                          {/* El enlace da el teclado; el clic en la fila sigue abriéndola. */}
+                          <Link
+                            href={hrefFor(s)}
+                            onClick={(e) => e.stopPropagation()}
+                            aria-current={open ? "true" : undefined}
+                            className={cn("font-medium tabular-nums", open ? "text-brand-700" : "text-ink-900 hover:text-brand-700")}
+                          >
+                            {s.settlement_date}
+                          </Link>
+                        </td>
+                        <td className="px-3 py-2.5 text-ink-900">{responsibilityName(s)}</td>
+                        <td className={cn("px-3 py-2.5", support)}>{SOURCE_LABEL[s.source] ?? "Manual"}</td>
+                        <td className="px-3 py-2.5 text-right tabular-nums whitespace-nowrap text-ink-900">
+                          {money(Number(s.declared_cash) + Number(s.declared_yape))}
+                        </td>
+                        <td className="px-3 py-2.5 text-right tabular-nums whitespace-nowrap text-ink-900">{money(s.payout_amount)}</td>
+                        <td className="py-2.5 pl-3 pr-4">
+                          <Badge tone={STATUS_TONE[s.status] ?? "neutral"}>{STATUS_LABEL[s.status] ?? s.status}</Badge>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </section>
 
       {detail && (
         <SettlementDetailPanel
@@ -202,6 +263,7 @@ function UploadPanel({
   onDone: (m: string) => void;
 }) {
   const router = useRouter();
+  const id = useId();
   const fileRef = useRef<HTMLInputElement>(null);
   const [storeId, setStoreId] = useState(stores.length > 1 ? "__all__" : (stores[0]?.id ?? ""));
   const [responsibility, setResponsibility] = useState("");
@@ -255,84 +317,92 @@ function UploadPanel({
   }
 
   return (
-    <Card className="space-y-3 p-4">
-      <h3 className="text-sm font-semibold text-slate-800">Cargar una liquidación</h3>
-      <div className="flex flex-wrap gap-2">
-        <select
-          value={storeId}
-          onChange={(e) => setStoreId(e.target.value)}
-          className="rounded-lg border border-slate-300 px-2 py-2 text-sm"
-        >
-          {stores.length > 1 && (
-            <option value="__all__">Aurela + Kenku (según CLIENTE)</option>
-          )}
-          {stores.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name}
-            </option>
-          ))}
-        </select>
-        <select
-          value={responsibility}
-          onChange={(e) => setResponsibility(e.target.value)}
-          className="rounded-lg border border-slate-300 px-2 py-2 text-sm"
-        >
-          <option value="">Courier o motorizado (asignar después)</option>
-          <optgroup label="Couriers">
-            {SETTLEMENT_COURIERS.map((courier) => (
-              <option key={courier.id} value={`courier:${courier.id}`}>
-                {courier.label}
-              </option>
-            ))}
-          </optgroup>
-          <optgroup label="Motorizados propios">
-            {riders.map((r) => (
-              <option key={r.id} value={`rider:${r.id}`}>
-                {r.full_name}
-              </option>
-            ))}
-          </optgroup>
-        </select>
-        <input
-          type="date"
-          value={date}
-          onChange={(e) => setDate(e.target.value)}
-          className="rounded-lg border border-slate-300 px-2 py-2 text-sm"
-        />
-        <input
-          value={cash}
-          onChange={(e) => setCash(e.target.value)}
-          placeholder="Efectivo depositado"
-          className="w-44 rounded-lg border border-slate-300 px-2 py-2 text-sm"
-        />
-        <input
-          value={yape}
-          onChange={(e) => setYape(e.target.value)}
-          placeholder="Yape depositado"
-          className="w-40 rounded-lg border border-slate-300 px-2 py-2 text-sm"
-        />
-      </div>
-      <input
-        ref={fileRef}
-        type="file"
-        accept="image/*,.csv,.xlsx,text/csv"
-        className="block text-sm text-slate-600"
+    <section className={SECTION_CARD} aria-labelledby={`${id}-title`}>
+      <SectionHead
+        id={`${id}-title`}
+        title="Cargar una liquidación"
+        help="Foto del cuaderno o Excel/CSV del courier. La foto se transcribe y lo ilegible queda en blanco para que lo completes: nunca se inventa un monto. La fecha que pongas manda sobre la que traiga el archivo. En reportes de Axel, la columna CLIENTE decide si cada fila pertenece a Aurela o Kenku."
       />
-      <p className="text-xs text-slate-400">
-        Foto del cuaderno o Excel/CSV del courier. La foto se transcribe y lo ilegible queda en
-        blanco para que lo completes: nunca se inventa un monto. La fecha que pongas manda sobre la
-        que traiga el archivo. En reportes de Axel, la columna CLIENTE decide si cada fila pertenece
-        a Aurela o Kenku.
-      </p>
-      {err && <p className="text-sm text-red-600">{err}</p>}
-      <button
-        onClick={upload}
-        disabled={busy}
-        className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
-      >
-        {busy ? "Leyendo…" : "Cargar liquidación"}
-      </button>
-    </Card>
+      <div className="grid gap-x-4 gap-y-4 pt-4 sm:grid-cols-2 lg:grid-cols-3">
+        <Field label="Tienda" htmlFor={`${id}-store`}>
+          <select id={`${id}-store`} value={storeId} onChange={(e) => setStoreId(e.target.value)} className={FIELD}>
+            {stores.length > 1 && <option value="__all__">Aurela + Kenku (según CLIENTE)</option>}
+            {stores.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Courier o motorizado" htmlFor={`${id}-who`}>
+          <select id={`${id}-who`} value={responsibility} onChange={(e) => setResponsibility(e.target.value)} className={FIELD}>
+            <option value="">Courier o motorizado (asignar después)</option>
+            <optgroup label="Couriers">
+              {SETTLEMENT_COURIERS.map((courier) => (
+                <option key={courier.id} value={`courier:${courier.id}`}>
+                  {courier.label}
+                </option>
+              ))}
+            </optgroup>
+            <optgroup label="Motorizados propios">
+              {riders.map((r) => (
+                <option key={r.id} value={`rider:${r.id}`}>
+                  {r.full_name}
+                </option>
+              ))}
+            </optgroup>
+          </select>
+        </Field>
+        <Field label="Fecha de la liquidación" htmlFor={`${id}-date`}>
+          <input
+            id={`${id}-date`}
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            className={cn(FIELD, "tabular-nums")}
+          />
+        </Field>
+        <Field label="Efectivo depositado" htmlFor={`${id}-cash`}>
+          <input
+            id={`${id}-cash`}
+            inputMode="decimal"
+            value={cash}
+            onChange={(e) => setCash(e.target.value)}
+            placeholder="0.00"
+            className={cn(FIELD, "tabular-nums")}
+          />
+        </Field>
+        <Field label="Yape depositado" htmlFor={`${id}-yape`}>
+          <input
+            id={`${id}-yape`}
+            inputMode="decimal"
+            value={yape}
+            onChange={(e) => setYape(e.target.value)}
+            placeholder="0.00"
+            className={cn(FIELD, "tabular-nums")}
+          />
+        </Field>
+        <Field label="Foto o Excel/CSV" htmlFor={`${id}-file`}>
+          <input
+            id={`${id}-file`}
+            ref={fileRef}
+            type="file"
+            accept="image/*,.csv,.xlsx,text/csv"
+            className="block w-full min-w-0 text-[13px] text-ink-700 file:mr-3 file:h-9 file:cursor-pointer file:rounded-md file:border-0 file:bg-white file:px-3 file:text-sm file:font-semibold file:text-ink-700 file:shadow-control file:ring-1 file:ring-inset file:ring-line-strong hover:file:bg-wash"
+          />
+        </Field>
+      </div>
+      <div className={cn(CARD_ZONE, "mt-4 flex flex-wrap items-center justify-end gap-3")}>
+        {err && (
+          <p role="alert" className="mr-auto text-[13px] text-crit-fg">
+            {err}
+          </p>
+        )}
+        <OpsButton variant="primary" onClick={upload} disabled={busy}>
+          {busy ? "Leyendo…" : "Cargar liquidación"}
+        </OpsButton>
+      </div>
+    </section>
   );
 }
 
@@ -370,137 +440,152 @@ function SettlementDetailPanel({
     });
 
   return (
-    <Card className="space-y-4 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-slate-800">
-          Liquidación del {settlement.settlement_date}
-          {closed && <span className="ml-2 text-xs font-normal text-slate-500">· cerrada</span>}
-        </h3>
-        <button
-          onClick={() => router.push("/dashboard/liquidaciones")}
-          className="text-xs text-slate-500 hover:text-slate-700"
-        >
-          Cerrar detalle
-        </button>
-      </div>
-
-      <TotalsGrid
-        reconciled={reconciled}
-        payout={payout}
-        courier={settlement.courier}
+    <section className={SECTION_CARD} aria-labelledby="liquidacion-detalle">
+      <SectionHead
+        id="liquidacion-detalle"
+        title={`Liquidación del ${settlement.settlement_date}`}
+        badge={<Badge tone={STATUS_TONE[settlement.status] ?? "neutral"}>{STATUS_LABEL[settlement.status] ?? settlement.status}</Badge>}
+        aside={
+          <OpsButton variant="ghost" size="sm" onClick={() => router.push("/dashboard/liquidaciones")}>
+            Cerrar detalle
+          </OpsButton>
+        }
       />
-      {settlement.source === "ruta" && settlement.route_id && <p className="rounded-lg bg-sky-50 p-3 text-sm">
-        Este lote conserva el reporte por tienda. La ganancia y el saldo neto del motorizado se aprueban una sola vez en su ruta diaria: {" "}
-        <a className="inline-flex min-h-11 items-center font-semibold underline" href={`/dashboard/courier/reparto?id=${settlement.route_id}&dia=${settlement.settlement_date}`}>Ver ganancia y saldo del motorizado</a>.
-      </p>}
 
-      {err && <p className="text-sm text-red-600">{err}</p>}
+      <div className="space-y-4 pt-4">
+        <TotalsGrid reconciled={reconciled} payout={payout} courier={settlement.courier} />
 
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[760px] text-sm">
-          <thead className="border-b border-slate-200 text-left text-xs text-slate-500">
-            <tr>
-              <th className="px-3 py-2 font-medium">Cliente</th>
-              <th className="px-3 py-2 font-medium">Pedido</th>
-              <th className="px-3 py-2 font-medium">Reportado cobrado</th>
-              <th className="px-3 py-2 font-medium">Comisión reportada</th>
-              <th className="px-3 py-2 font-medium">Esperado según Kapta</th>
-              <th className="px-3 py-2 font-medium">Diferencia</th>
-              <th className="min-w-[220px] px-3 py-2 font-medium">Resultado de validación</th>
-              {canEdit && !closed && <th className="px-3 py-2 font-medium" />}
-            </tr>
-          </thead>
-          <tbody>
-            {reconciled.lines.map((r) => (
-              <tr key={r.line.id} className="border-b border-slate-100">
-                <td className="px-3 py-2 text-slate-700">
-                  {r.line.customer_name ?? r.line.guide_code ?? "—"}
-                  {r.line.district && (
-                    <span className="block text-[11px] text-slate-400">{r.line.district}</span>
-                  )}
-                  {(r.line.store_hint || r.line.declared_status) && (
-                    <span className="block text-[11px] font-medium text-slate-500">
-                      {[r.line.store_hint, r.line.declared_status].filter(Boolean).join(" · ")}
-                    </span>
-                  )}
-                </td>
-                <td className="px-3 py-2 text-slate-700">
-                  {r.line.order_id
-                    ? <OrderLink orderId={r.line.order_id} className="font-medium text-slate-900 hover:text-brand-700">{orderNames[r.line.order_id] ?? r.line.order_name ?? "—"}</OrderLink>
-                    : (r.line.order_name ?? "—")}
-                </td>
-                <td className="px-3 py-2 text-slate-700">{money(r.declared)}</td>
-                <td className="px-3 py-2 text-slate-500">
-                  {r.line.declared_fee === null || r.line.declared_fee === undefined
-                    ? "—"
-                    : money(r.line.declared_fee)}
-                </td>
-                <td className="px-3 py-2 text-slate-500">
-                  {r.verdict === "sin_pedido" ? "—" : money(r.expected)}
-                  {/* La guía lleva pedidos acompañantes (MOM §32): lo esperado
-                      es la suma, y sin decirlo el número no casa con el pedido. */}
-                  {r.verdict !== "sin_pedido" && (r.facts?.companion_total ?? 0) > 0 && (
-                    <span className="block text-xs text-slate-500">
-                      incl. {money(r.facts!.companion_total!)} de acompañantes
-                    </span>
-                  )}
-                </td>
-                <td
-                  className={cn(
-                    "px-3 py-2 font-medium",
-                    r.difference < 0 ? "text-red-600" : r.difference > 0 ? "text-sky-700" : "text-slate-400",
-                  )}
-                >
-                  {r.verdict === "sin_pedido" ? "—" : money(r.difference)}
-                </td>
-                <td className="px-3 py-2">
-                  <span
+        {settlement.source === "ruta" && settlement.route_id && (
+          <Banner tone="info">
+            Este lote conserva el reporte por tienda. La ganancia y el saldo neto del motorizado se aprueban una
+            sola vez en su ruta diaria:{" "}
+            <a
+              className="inline-flex min-h-11 items-center font-semibold text-brand-700 underline underline-offset-4"
+              href={`/dashboard/courier/reparto?id=${settlement.route_id}&dia=${settlement.settlement_date}`}
+            >
+              Ver ganancia y saldo del motorizado
+            </a>
+            .
+          </Banner>
+        )}
+
+        {err && (
+          <Banner tone="crit" role="alert">
+            {err}
+          </Banner>
+        )}
+
+        {/* `relative`: el texto oculto del encabezado (sr-only, absoluto) se
+            recorta con la tabla; sin él estiraba la página en el teléfono. */}
+        <div className="relative overflow-x-auto">
+          <table className="w-full min-w-[760px] text-sm">
+            <thead>
+              <tr>
+                <th className={TH}>Cliente</th>
+                <th className={TH}>Pedido</th>
+                <th className={cn(TH, "text-right")}>Reportado cobrado</th>
+                <th className={cn(TH, "text-right")}>Comisión reportada</th>
+                <th className={cn(TH, "text-right")}>Esperado según Kapta</th>
+                <th className={cn(TH, "text-right")}>Diferencia</th>
+                <th className={cn(TH, "min-w-[220px]")}>Resultado de validación</th>
+                {canEdit && !closed && (
+                  <th className={TH}>
+                    <span className="sr-only">Acciones</span>
+                  </th>
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {reconciled.lines.map((r) => (
+                <tr key={r.line.id} className="border-b border-line align-top">
+                  <td className="px-3 py-2.5">
+                    <span className="block leading-5 text-ink-900">{r.line.customer_name ?? r.line.guide_code ?? "—"}</span>
+                    {r.line.district && (
+                      <span className="block text-[13px] leading-5 text-ink-500">{r.line.district}</span>
+                    )}
+                    {(r.line.store_hint || r.line.declared_status) && (
+                      <span className="block text-[13px] font-medium leading-5 text-ink-600">
+                        {[r.line.store_hint, r.line.declared_status].filter(Boolean).join(" · ")}
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2.5 text-ink-900">
+                    {r.line.order_id ? (
+                      <OrderLink orderId={r.line.order_id} className="font-medium text-brand-700 hover:underline">
+                        {orderNames[r.line.order_id] ?? r.line.order_name ?? "—"}
+                      </OrderLink>
+                    ) : (
+                      (r.line.order_name ?? "—")
+                    )}
+                  </td>
+                  <td className="px-3 py-2.5 text-right tabular-nums whitespace-nowrap text-ink-900">{money(r.declared)}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums whitespace-nowrap text-ink-600">
+                    {r.line.declared_fee === null || r.line.declared_fee === undefined
+                      ? "—"
+                      : money(r.line.declared_fee)}
+                  </td>
+                  <td className="px-3 py-2.5 text-right tabular-nums text-ink-600">
+                    <span className="whitespace-nowrap">{r.verdict === "sin_pedido" ? "—" : money(r.expected)}</span>
+                    {/* La guía lleva pedidos acompañantes (MOM §32): lo esperado
+                        es la suma, y sin decirlo el número no casa con el pedido. */}
+                    {r.verdict !== "sin_pedido" && (r.facts?.companion_total ?? 0) > 0 && (
+                      <span className="block text-[13px] text-ink-500">
+                        incl. {money(r.facts!.companion_total!)} de acompañantes
+                      </span>
+                    )}
+                  </td>
+                  <td
                     className={cn(
-                      "rounded-full px-2 py-0.5 text-xs font-medium",
-                      VERDICT_STYLE[r.verdict],
+                      "whitespace-nowrap px-3 py-2.5 text-right font-medium tabular-nums",
+                      r.difference < 0 ? "text-crit-fg" : r.difference > 0 ? "text-info-fg" : "text-ink-500",
                     )}
                   >
-                    {VERDICT_LABELS[r.verdict]}
-                  </span>
-                </td>
-                {canEdit && !closed && (
-                  <td className="min-w-[300px] px-3 py-2 text-right">
-                    <div className="flex flex-col items-end gap-2">
-                      {r.verdict === "sin_pedido" && r.line.match_status === "review" && (
-                        <RowMatchPicker
+                    {r.verdict === "sin_pedido" ? "—" : money(r.difference)}
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <Badge tone={VERDICT_TONE[r.verdict]} wrap>
+                      {VERDICT_LABELS[r.verdict]}
+                    </Badge>
+                  </td>
+                  {canEdit && !closed && (
+                    <td className="min-w-[264px] px-3 py-2.5 text-right">
+                      <div className="flex flex-col items-end gap-2">
+                        {r.verdict === "sin_pedido" && r.line.match_status === "review" && (
+                          <RowMatchPicker
+                            settlementId={settlement.id}
+                            lineId={r.line.id}
+                            disabled={pending}
+                            onRun={run}
+                          />
+                        )}
+                        <LineCorrectionForm
                           settlementId={settlement.id}
                           lineId={r.line.id}
+                          declaredAmount={r.line.declared_amount}
+                          declaredFee={r.line.declared_fee ?? null}
                           disabled={pending}
                           onRun={run}
                         />
-                      )}
-                      <LineCorrectionForm
-                        settlementId={settlement.id}
-                        lineId={r.line.id}
-                        declaredAmount={r.line.declared_amount}
-                        declaredFee={r.line.declared_fee ?? null}
-                        disabled={pending}
-                        onRun={run}
-                      />
-                    </div>
-                  </td>
-                )}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                      </div>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {reconciled.totals.reviewCount > 0 && (
+          <Banner tone="warn">
+            {reconciled.totals.reviewCount} línea(s) requieren confirmación. Revisa la tienda, el nombre, el
+            distrito y el monto; asigna el pedido correcto o marca &quot;sin pedido&quot;. No se podrá procesar
+            la liquidación mientras queden pendientes.
+          </Banner>
+        )}
       </div>
 
-      {reconciled.totals.reviewCount > 0 && (
-        <p className="text-xs text-amber-700">
-          {reconciled.totals.reviewCount} línea(s) requieren confirmación. Revisa la tienda,
-          el nombre, el distrito y el monto; asigna el pedido correcto o marca &quot;sin
-          pedido&quot;. No se podrá procesar la liquidación mientras queden pendientes.
-        </p>
-      )}
-
       {canEdit && !closed && (
-        <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+        <>
           <SettlementResponsibilityPicker
             settlementId={settlement.id}
             riders={riders}
@@ -512,64 +597,66 @@ function SettlementDetailPanel({
             disabled={pending}
             onRun={run}
           />
-          <button
-            disabled={pending}
-            onClick={() => run(() => applySettlementToMaster(settlement.id))}
-            className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-            title="Marca en el Master las entregas y rechazos que declara esta liquidación"
-          >
-            Aplicar al Master
-          </button>
-          <button
-            disabled={pending}
-            onClick={() => run(() => recheckSettlement(settlement.id))}
-            className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-          >
-            Actualizar validación
-          </button>
-          {canClose && (
-            <>
-              {!settlement.courier && (
-                <label className="flex items-center gap-1.5 text-xs text-slate-600">
-                  <input
-                    type="checkbox"
-                    checked={deduct}
-                    onChange={(e) => setDeduct(e.target.checked)}
-                  />
-                  Descontar el faltante del pago
-                </label>
-              )}
-              <button
-                disabled={pending}
-                onClick={() =>
-                  settlement.source === "ruta" && settlement.route_id
-                    ? router.push(`/dashboard/courier/reparto?id=${settlement.route_id}&dia=${settlement.settlement_date}`)
-                    : run(() => closeSettlement(settlement.id, { deductShortfall: deduct }))
-                }
-                className="rounded-lg bg-slate-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-900 disabled:opacity-50"
-              >
-                {settlement.source === "ruta" && settlement.route_id ? "Revisar cierre diario de la ruta" : settlement.courier ? "Cerrar lote" : "Cerrar y fijar el pago"}
-              </button>
-            </>
-          )}
-        </div>
+          <div className={cn(CARD_ZONE, "mt-4 flex flex-wrap items-center gap-2")}>
+            <OpsButton
+              disabled={pending}
+              onClick={() => run(() => applySettlementToMaster(settlement.id))}
+              title="Marca en el Master las entregas y rechazos que declara esta liquidación"
+            >
+              Aplicar al Master
+            </OpsButton>
+            <OpsButton disabled={pending} onClick={() => run(() => recheckSettlement(settlement.id))}>
+              Actualizar validación
+            </OpsButton>
+            {canClose && (
+              <div className="ml-auto flex flex-wrap items-center gap-3">
+                {!settlement.courier && (
+                  <label className="flex items-center gap-2 text-[13px] text-ink-700">
+                    <input
+                      type="checkbox"
+                      checked={deduct}
+                      onChange={(e) => setDeduct(e.target.checked)}
+                      className={CHECKBOX}
+                    />
+                    Descontar el faltante del pago
+                  </label>
+                )}
+                <OpsButton
+                  variant="primary"
+                  disabled={pending}
+                  onClick={() =>
+                    settlement.source === "ruta" && settlement.route_id
+                      ? router.push(`/dashboard/courier/reparto?id=${settlement.route_id}&dia=${settlement.settlement_date}`)
+                      : run(() => closeSettlement(settlement.id, { deductShortfall: deduct }))
+                  }
+                >
+                  {settlement.source === "ruta" && settlement.route_id
+                    ? "Revisar cierre diario de la ruta"
+                    : settlement.courier
+                      ? "Cerrar lote"
+                      : "Cerrar y fijar el pago"}
+                </OpsButton>
+              </div>
+            )}
+          </div>
+        </>
       )}
 
       {closed && (
-        <p className="border-t border-slate-100 pt-3 text-xs text-slate-500">
+        <p className={cn(CARD_ZONE, "mt-4 text-[13px] leading-5 text-ink-500")}>
           Cerrada el {settlement.closed_at?.slice(0, 10)}.{" "}
           {settlement.courier ? (
             <>La comisión del courier quedó fijada con los valores revisados.</>
           ) : (
             <>
               Pago congelado en{" "}
-              <strong className="text-slate-700">{money(settlement.payout_amount)}</strong>.
+              <strong className="font-semibold tabular-nums text-ink-900">{money(settlement.payout_amount)}</strong>.
             </>
           )}{" "}
           Si hay que corregir algo, abre una liquidación de ajuste.
         </p>
       )}
-    </Card>
+    </section>
   );
 }
 
@@ -607,28 +694,23 @@ function RowMatchPicker({
   if (!open) {
     return (
       <div className="flex justify-end gap-2">
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={search}
-          className="rounded-md bg-brand-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-brand-700 disabled:opacity-50"
-        >
+        <OpsButton size="sm" disabled={disabled} onClick={search}>
           Cotejar pedido
-        </button>
-        <button
-          type="button"
+        </OpsButton>
+        <OpsButton
+          variant="ghost"
+          size="sm"
           disabled={disabled}
           onClick={() => onRun(() => relinkLine(settlementId, lineId, null))}
-          className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
         >
           Sin pedido
-        </button>
+        </OpsButton>
       </div>
     );
   }
 
   return (
-    <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50/60 p-2 text-left">
+    <div className="w-full space-y-2 rounded-lg bg-wash p-2 text-left">
       <div className="flex gap-1.5">
         <input
           value={query}
@@ -639,21 +721,21 @@ function RowMatchPicker({
               void search();
             }
           }}
+          aria-label="Buscar el pedido"
           placeholder="Nombre, pedido o distrito"
-          className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs"
+          className={cn(FIELD_BOX, "h-8 min-w-0 flex-1 px-2 text-[13px]")}
         />
-        <button
-          type="button"
-          disabled={searching || disabled}
-          onClick={search}
-          className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 disabled:opacity-50"
-        >
+        <OpsButton size="sm" disabled={searching || disabled} onClick={search}>
           {searching ? "Buscando…" : "Buscar"}
-        </button>
+        </OpsButton>
       </div>
-      {searchError && <p className="text-[11px] text-red-600">{searchError}</p>}
+      {searchError && (
+        <p role="alert" className="text-[13px] text-crit-fg">
+          {searchError}
+        </p>
+      )}
       {!searching && candidates.length === 0 && (
-        <p className="text-[11px] text-slate-500">
+        <p className="text-[13px] text-ink-500">
           Sin coincidencias seguras. Prueba con el código del pedido o más parte del nombre.
         </p>
       )}
@@ -665,25 +747,24 @@ function RowMatchPicker({
             disabled={disabled}
             onClick={() => onRun(() => relinkLine(settlementId, lineId, candidate.orderId))}
             className={cn(
-              "block w-full rounded-md border bg-white p-2 text-left hover:border-brand-300 hover:bg-brand-50 disabled:opacity-50",
-              candidate.warnings.length ? "border-amber-400" : "border-slate-200",
+              "block w-full rounded-md bg-white p-2 text-left ring-1 ring-inset transition-shadow disabled:opacity-50",
+              candidate.warnings.length ? "ring-warn-fg" : "ring-line-strong hover:ring-ink-300",
             )}
           >
             <span className="flex items-center justify-between gap-2">
-              <strong className="text-xs text-slate-800">{candidate.orderName}</strong>
-              <span className="text-[10px] font-semibold text-brand-700">
-                {candidate.score} pts
-              </span>
+              <strong className="text-[13px] font-semibold text-ink-900">{candidate.orderName}</strong>
+              <span className="text-xs tabular-nums text-ink-500">{candidate.score} pts</span>
             </span>
-            <span className="block text-[11px] text-slate-600">
+            <span className="block text-xs leading-4 text-ink-600">
               {candidate.storeName} · {candidate.customerName} · {candidate.district}
             </span>
-            <span className="block text-[10px] text-slate-400">
+            <span className="block text-xs leading-4 tabular-nums text-ink-500">
               {candidate.total === null ? "Monto —" : money(candidate.total)} · {candidate.status}
               {candidate.reasons.length ? ` · ${candidate.reasons.join(", ")}` : ""}
             </span>
             {candidate.warnings.map((warning) => (
-              <span key={warning} className="mt-1 block text-[10px] font-medium text-amber-700">
+              <span key={warning} className="mt-1 flex items-start gap-1 text-xs font-medium leading-4 text-warn-fg">
+                <IconAlert className="size-3.5 shrink-0" aria-hidden />
                 Revisa antes de vincular: {warning}
               </span>
             ))}
@@ -691,21 +772,17 @@ function RowMatchPicker({
         ))}
       </div>
       <div className="flex justify-between gap-2">
-        <button
-          type="button"
-          onClick={() => setOpen(false)}
-          className="text-[11px] text-slate-500 underline"
-        >
+        <OpsButton variant="ghost" size="sm" onClick={() => setOpen(false)}>
           Cancelar
-        </button>
-        <button
-          type="button"
+        </OpsButton>
+        <OpsButton
+          variant="ghost"
+          size="sm"
           disabled={disabled}
           onClick={() => onRun(() => relinkLine(settlementId, lineId, null))}
-          className="text-[11px] text-slate-600 underline"
         >
           Confirmar que no tiene pedido
-        </button>
+        </OpsButton>
       </div>
     </div>
   );
@@ -737,7 +814,7 @@ function LineCorrectionForm({
         type="button"
         disabled={disabled}
         onClick={() => setOpen(true)}
-        className="text-xs font-medium text-slate-600 underline decoration-slate-300 underline-offset-4 hover:text-slate-900 disabled:opacity-50"
+        className="text-[13px] font-medium text-brand-700 underline-offset-4 hover:underline disabled:opacity-50"
       >
         Corregir monto o comisión
       </button>
@@ -755,53 +832,51 @@ function LineCorrectionForm({
     !reason.trim() ||
     (amountValue !== null && (!Number.isFinite(amountValue) || amountValue < 0)) ||
     (feeValue !== null && (!Number.isFinite(feeValue) || feeValue < 0));
+  const input = cn(FIELD_BOX, "mt-1 h-8 w-full px-2 text-[13px]");
 
   return (
-    <div className="w-full space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-2 text-left">
+    <div className="w-full space-y-2 rounded-lg bg-wash p-3 text-left">
       <div className="grid grid-cols-2 gap-2">
-        <label className="text-[11px] font-medium text-slate-600">
+        <label className="block text-[13px] font-medium text-ink-700">
           Monto reportado
           <input
             inputMode="decimal"
             value={amount}
             onChange={(event) => setAmount(event.target.value)}
             placeholder="Sin lectura"
-            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-800"
+            className={cn(input, "tabular-nums")}
           />
         </label>
-        <label className="text-[11px] font-medium text-slate-600">
+        <label className="block text-[13px] font-medium text-ink-700">
           Comisión reportada
           <input
             inputMode="decimal"
             value={fee}
             onChange={(event) => setFee(event.target.value)}
             placeholder="Sin lectura"
-            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-800"
+            className={cn(input, "tabular-nums")}
           />
         </label>
       </div>
-      <label className="block text-[11px] font-medium text-slate-600">
+      <label className="block text-[13px] font-medium text-ink-700">
         Motivo de la corrección
         <input
           value={reason}
           onChange={(event) => setReason(event.target.value)}
           placeholder="Ej. La foto muestra comisión S/ 10"
-          className="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-800"
+          className={input}
         />
       </label>
-      <p className="text-[10px] leading-4 text-slate-500">
+      <p className="text-xs leading-4 text-ink-500">
         La imagen original no cambia. Kapta guardará el valor anterior, el nuevo y quién lo corrigió.
       </p>
       <div className="flex items-center justify-end gap-2">
-        <button
-          type="button"
-          onClick={() => setOpen(false)}
-          className="text-xs text-slate-500 hover:text-slate-800"
-        >
+        <OpsButton variant="ghost" size="sm" onClick={() => setOpen(false)}>
           Cancelar
-        </button>
-        <button
-          type="button"
+        </OpsButton>
+        <OpsButton
+          variant="primary"
+          size="sm"
           disabled={disabled || invalid}
           onClick={() => {
             setOpen(false);
@@ -813,10 +888,9 @@ function LineCorrectionForm({
               }),
             );
           }}
-          className="rounded-md bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-40"
         >
           Guardar corrección
-        </button>
+        </OpsButton>
       </div>
     </div>
   );
@@ -885,51 +959,46 @@ function TotalsGrid({
     },
   ];
 
+  // Un marco de cifras (dato con celdas, no una tarjeta): anillo `line`, sin sombra.
   return (
-    <section className="overflow-hidden rounded-xl border border-slate-200" aria-label="Validación del lote">
+    <section className="overflow-hidden rounded-lg ring-1 ring-line" aria-label="Validación del lote">
       <div
         className={cn(
           "flex flex-wrap items-start justify-between gap-3 px-4 py-3",
-          issues.length ? "bg-amber-50 text-amber-950" : "bg-emerald-50 text-emerald-950",
+          issues.length ? "bg-warn-wash" : "bg-ok-wash",
         )}
       >
-        <div>
-          <p className="text-sm font-semibold">
+        <div className="min-w-0">
+          <p className={cn("text-sm font-semibold", issues.length ? "text-warn-fg" : "text-ok-fg")}>
             {issues.length ? "Revisión necesaria antes de cerrar" : "Todo coincide"}
           </p>
-          <p className="mt-0.5 text-xs opacity-80">
+          <p className="mt-0.5 text-[13px] leading-5 text-ink-700">
             {issues.length ? issues.join("; ") : "El reporte, el Master y el depósito no muestran diferencias."}
           </p>
         </div>
-        <span className="rounded-full bg-white/70 px-2.5 py-1 text-xs font-medium">
-          {courierLabel(courier) ?? "Motorizado propio"}
-        </span>
+        <Badge>{courierLabel(courier) ?? "Motorizado propio"}</Badge>
       </div>
 
-      <div className="grid lg:grid-cols-2 lg:divide-x lg:divide-slate-200">
+      <div className="grid border-t border-line lg:grid-cols-2 lg:divide-x lg:divide-line">
         {[
           { title: courier ? "Reportado por el courier" : "Reportado por el motorizado", items: reported },
           { title: "Validación de Kapta", items: kapta },
-        ].map((group) => (
-          <div key={group.title} className="p-4">
-            <h4 className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
-              {group.title}
-            </h4>
+        ].map((group, i) => (
+          <div key={group.title} className={cn("p-4", i > 0 && "border-t border-line lg:border-t-0")}>
+            <h4 className="text-sm font-semibold text-ink-900">{group.title}</h4>
             <dl className="mt-3 grid grid-cols-2 gap-x-5 gap-y-4">
               {group.items.map((item) => (
                 <div key={item.label}>
-                  <dt className="text-[11px] leading-4 text-slate-500">{item.label}</dt>
+                  <dt className="text-[13px] leading-5 text-ink-600">{item.label}</dt>
                   <dd
                     className={cn(
-                      "mt-0.5 text-sm font-semibold tabular-nums text-slate-900",
-                      item.tone === "bad" && "text-red-700",
-                      item.tone === "warn" && "text-amber-700",
-                      item.tone === "good" && "text-emerald-700",
+                      "mt-0.5 text-base font-semibold tabular-nums",
+                      item.tone === "bad" ? "text-crit-fg" : item.tone === "warn" ? "text-warn-fg" : item.tone === "good" ? "text-ok-fg" : "text-ink-900",
                     )}
                   >
                     {item.value}
                   </dd>
-                  <p className="mt-0.5 text-[10px] leading-4 text-slate-400">{item.hint}</p>
+                  <p className="mt-0.5 text-xs leading-4 text-ink-500">{item.hint}</p>
                 </div>
               ))}
             </dl>
@@ -938,9 +1007,9 @@ function TotalsGrid({
       </div>
 
       {!courier && payout && (
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 bg-slate-50 px-4 py-3 text-sm">
-          <span className="text-slate-600">Pago calculado al motorizado propio</span>
-          <strong className="tabular-nums text-slate-900">{money(payout.net)}</strong>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line bg-wash px-4 py-3 text-sm">
+          <span className="text-ink-700">Pago calculado al motorizado propio</span>
+          <strong className="font-semibold tabular-nums text-ink-900">{money(payout.net)}</strong>
         </div>
       )}
     </section>
@@ -968,6 +1037,7 @@ function SettlementResponsibilityPicker({
   disabled: boolean;
   onRun: (fn: () => Promise<{ ok: boolean; error?: string; message?: string }>) => void;
 }) {
+  const id = useId();
   const [responsibility, setResponsibility] = useState(
     currentCourier
       ? `courier:${currentCourier}`
@@ -1000,32 +1070,27 @@ function SettlementResponsibilityPicker({
   }
 
   return (
-    <div className="w-full rounded-xl border border-slate-200 bg-slate-50 p-3">
-      <div className="mb-2 flex items-center justify-between gap-3">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-700">Datos del lote</p>
-          <p className="text-[11px] text-slate-500">
+    <div className={cn(CARD_ZONE, "mt-4")}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h4 className="text-sm font-semibold leading-5 text-ink-900">Datos del lote</h4>
+          <p className="mt-0.5 text-[13px] leading-5 text-ink-500">
             Asigna quién reportó la ruta y registra lo que realmente ingresó a la empresa.
           </p>
         </div>
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={saveHeader}
-          className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-        >
+        <OpsButton size="sm" disabled={disabled} onClick={saveHeader}>
           Guardar datos del lote
-        </button>
+        </OpsButton>
       </div>
 
-      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-        <label className="text-xs font-medium text-slate-600">
-          Responsable del lote
+      <div className="mt-4 grid gap-x-4 gap-y-4 md:grid-cols-2 xl:grid-cols-4">
+        <Field label="Responsable del lote" htmlFor={`${id}-who`}>
           <select
+            id={`${id}-who`}
             value={responsibility}
             onChange={(e) => setResponsibility(e.target.value)}
             disabled={disabled}
-            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-800"
+            className={FIELD}
           >
             <option value="">Sin responsable asignado</option>
             <optgroup label="Couriers">
@@ -1046,53 +1111,54 @@ function SettlementResponsibilityPicker({
               ))}
             </optgroup>
           </select>
-        </label>
-        <label className="text-xs font-medium text-slate-600">
-          Efectivo depositado a la empresa
+        </Field>
+        <Field label="Efectivo depositado a la empresa" htmlFor={`${id}-cash`}>
           <input
+            id={`${id}-cash`}
             type="number"
             min="0"
             step="0.01"
             value={cashValue}
             onChange={(e) => setCashValue(e.target.value)}
             disabled={disabled}
-            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-800"
+            className={cn(FIELD, "tabular-nums")}
           />
-        </label>
-        <label className="text-xs font-medium text-slate-600">
-          Yape / POS depositado a la empresa
+        </Field>
+        <Field label="Yape / POS depositado a la empresa" htmlFor={`${id}-yape`}>
           <input
+            id={`${id}-yape`}
             type="number"
             min="0"
             step="0.01"
             value={yapeValue}
             onChange={(e) => setYapeValue(e.target.value)}
             disabled={disabled}
-            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-800"
+            className={cn(FIELD, "tabular-nums")}
           />
-        </label>
-        <label className="text-xs font-medium text-slate-600">
-          Nota del lote
+        </Field>
+        <Field label="Nota del lote" htmlFor={`${id}-note`}>
           <input
+            id={`${id}-note`}
             value={noteValue}
             onChange={(e) => setNoteValue(e.target.value)}
             disabled={disabled}
             placeholder="Observación opcional"
-            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-800"
+            className={FIELD}
           />
-        </label>
+        </Field>
       </div>
 
-      <details className="mt-2 text-xs text-slate-600">
+      <details className="mt-4 text-[13px] text-ink-700">
         <summary className="cursor-pointer select-none font-medium">Dar de alta un motorizado propio</summary>
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <input
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
+            aria-label="Nombre del motorizado"
             placeholder="Nombre del motorizado"
-            className="w-56 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm"
+            className={cn(FIELD_BOX, "h-9 w-56 px-3")}
           />
-          <button
+          <OpsButton
             disabled={disabled || !newName.trim()}
             onClick={() => {
               const name = newName.trim();
@@ -1101,10 +1167,9 @@ function SettlementResponsibilityPicker({
                 createRider({ storeId: null, fullName: name, docNumber: null, phone: null, courier: null }),
               );
             }}
-            className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-50"
           >
             Crear motorizado
-          </button>
+          </OpsButton>
         </div>
       </details>
     </div>

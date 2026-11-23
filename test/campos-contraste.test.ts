@@ -67,7 +67,9 @@ describe("el borde de los campos se ve", () => {
             i++;
           }
           const tag = src.slice(m.index!, i);
-          if (/type="(checkbox|radio)"/.test(tag)) continue;
+          // Casillas y radios son nativos; el de archivo se ve como su botón
+          // «Elegir archivo», que tiene texto y va con el anillo de botón.
+          if (/type="(checkbox|radio|file)"/.test(tag)) continue;
           if (/\b(ring|border)-line-strong\b/.test(tag)) {
             offenders.push(`${dir}/${file}:${src.slice(0, m.index!).split("\n").length}`);
           }
