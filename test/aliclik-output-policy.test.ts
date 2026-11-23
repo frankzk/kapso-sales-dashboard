@@ -40,7 +40,8 @@ describe("Aliclik proactivo en Lima", () => {
   });
 
   it("también permite preparar con otro courier en ruta, conservando todas las salidas en la evidencia", () => {
-    const second = { ...alexis, id: "other", courier: "axel", delivery_status: "en_ruta" };
+    // En ruta HOY: sin reporte desde un día anterior ya no sería activa (owner, 23-11-2026, `salidaActiva`).
+    const second = { ...alexis, id: "other", courier: "axel", delivery_status: "en_ruta", custody_transferred_at: new Date().toISOString() };
     const result = decide([alexis, second], "La clienta pidió otra fecha.");
     expect(result.ok).toBe(true);
     expect(result.estorban).toHaveLength(2);

@@ -14,6 +14,7 @@ import "server-only";
 //   5. Un timeout NO es un fallo: la intención queda 'pending' y el reintento usa la MISMA Idempotency-Key, así que
 //      GF devuelve la misma guía. DUPLICATE_ORDER / IDEMPOTENCY_CONFLICT con tracking_id se ADOPTAN (la guía existe).
 import { otherCourierBlocksGf } from "@/lib/gf-other-courier";
+import { SALIDA_ACTIVA_COLUMNS, withLastCourierChange } from "@/lib/salida-activa-server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
@@ -87,9 +88,9 @@ export async function createGfGuideFor(
   if ((shipments.data ?? []).some((s) => ["pendiente", "en_ruta"].includes(s.delivery_status) && !s.returned_at))
     return { ok: false, error: "El pedido ya tiene una guía de GF Courier viva." };
   // Con una salida activa de otro courier no se crea la de GF (owner, 23-11-2026, #KP207468): salían las dos.
-  const others = await admin.from("shipments").select("courier,guide_code,delivery_status,custody_state,returned_at").eq("order_id", orderId).neq("courier", GF_COURIER);
+  const others = await admin.from("shipments").select(`courier,guide_code,delivery_status,${SALIDA_ACTIVA_COLUMNS}`).eq("order_id", orderId).neq("courier", GF_COURIER);
   if (others.error) return { ok: false, error: others.error.message };
-  const otherBlock = otherCourierBlocksGf(others.data ?? []);
+  const otherBlock = otherCourierBlocksGf(await withLastCourierChange(admin, orderId, (others.data ?? []) as any[]));
   if (otherBlock) return { ok: false, error: otherBlock };
 
   const order = await admin.from("orders").select("name,line_items,raw,financial_status,payment_gateway,total_refunded").eq("id", orderId).maybeSingle();

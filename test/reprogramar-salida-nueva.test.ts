@@ -380,8 +380,9 @@ describe("regla 2: Grupo GF rellena la salida que nació al imprimir", () => {
     expect(result.accepted[0]).toMatchObject({ needsLabel: true });
     const inserted = shipmentWrites().find((w) => w.op === "insert")!;
     expect(inserted.value).toMatchObject({ courier: "propio", custody_state: "empresa" });
-    const reason = state.writes.find((w) => w.table === "order_events" && w.value.kind === "additional_output_reason")!;
-    expect(reason.value.reason).toContain("Tanders no entregó y su caja todavía vuelve");
+    // Owner, 23-11-2026 (`salidaActiva`): la guía de Tanders ya reportada «RETURNING» no es activa: no hace falta motivo
+    // de salida adicional.
+    expect(state.writes.some((w) => w.table === "order_events" && w.value.kind === "additional_output_reason")).toBe(false);
     expect(result.notice).toContain("Salida nueva AUR177756-S03: imprime su rótulo y pégalo sobre la caja que volvió");
   });
 

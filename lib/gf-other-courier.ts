@@ -5,39 +5,34 @@
 // El 20-11 una persona creó desde la Mesa de ruta una SEGUNDA guía GF (-S2) con la de Aliclik en ruta: crear una guía
 // GF solo miraba si había otra guía GF viva. Las dos salieron a reparto el mismo día.
 //
-// LA REGLA. Con una salida activa de otro courier (pendiente, en ruta o por preparar, sin devolver) no se crea la guía
-// de GF Courier: primero se anula o se cierra esa salida. «Propio» (Grupo GF) y las salidas por definir no cuentan.
+// LA REGLA. Con una salida ACTIVA de otro courier no se crea la guía de GF Courier: primero se anula o se cierra.
+// «Activa» es la definición única de `salidaActiva` (lib/shipment-output.ts; owner, 23-11-2026): en preparación, en
+// ruta o reprogramada; no si su courier ya reportó que no la entregó (no contesta, rechazo, anulado…) ni si sigue en
+// ruta sin reporte pasado el día de su ruta. «Propio» (Grupo GF) y las salidas por definir no cuentan.
 // Pura: la usan `createGfGuideFor` (servidor) y la tarjeta de GF de la Mesa de ruta.
+import { salidaActiva, type SalidaExistente } from "@/lib/shipment-output";
 
 const LABEL: Record<string, string> = {
   aliclik: "Aliclik", swayp: "Swayp (antes Fénix)", fenix: "Swayp (antes Fénix)", shalom: "Shalom", olva: "Olva",
   tanders: "Tanders", axel: "Axel Courier", "axel courier": "Axel Courier", urpi: "Urpi",
 };
 const norm = (value: string | null | undefined) => String(value ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLowerCase();
-const LIVE = ["pendiente", "en_ruta", "por_preparar"];
 
 /** Nombre del courier de otra empresa, o null si es GF, Grupo GF, por definir o desconocido. */
 export function otherCourierLabel(courier: string | null | undefined): string | null {
   return LABEL[norm(courier)] ?? null;
 }
 
-export interface OtherCourierOutput {
-  courier: string | null;
-  guide_code?: string | null;
-  delivery_status: string;
-  custody_state?: string | null;
-  returned_at?: string | null;
-}
+export type OtherCourierOutput = Omit<SalidaExistente, "courier"> & { courier: string | null };
 
 /** Salidas activas de otro courier: las que impiden crear la guía de GF. */
-export function liveOtherCourierOutputs<T extends OtherCourierOutput>(outputs: readonly T[]): T[] {
-  return outputs.filter((o) => otherCourierLabel(o.courier) !== null && LIVE.includes(o.delivery_status)
-    && o.custody_state !== "devuelto" && !o.returned_at);
+export function liveOtherCourierOutputs<T extends OtherCourierOutput>(outputs: readonly T[], today?: string): T[] {
+  return outputs.filter((o) => otherCourierLabel(o.courier) !== null && salidaActiva({ ...o, courier: o.courier ?? "" }, today));
 }
 
 /** Por qué no se crea la guía de GF, nombrando la salida activa; null si nada lo impide. */
-export function otherCourierBlocksGf(outputs: readonly OtherCourierOutput[]): string | null {
-  const live = liveOtherCourierOutputs(outputs)[0];
+export function otherCourierBlocksGf(outputs: readonly OtherCourierOutput[], today?: string): string | null {
+  const live = liveOtherCourierOutputs(outputs, today)[0];
   if (!live) return null;
   return gfBlockedByOtherCourierText(otherCourierLabel(live.courier)!, live.guide_code ?? null);
 }

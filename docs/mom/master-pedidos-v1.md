@@ -293,6 +293,30 @@ Reglas:
   acompañantes** de la misma clienta (§32). No es otra salida de ellos: es la
   misma caja, con una guía que cobra los dos, y el acompañante la hereda.
 - Puede existir más de una salida activa, pero Kapta debe mostrar una alerta.
+- **Qué es una salida activa (owner, 23-11-2026, #KP207468)** — una sola definición para todos los couriers (GF
+  Courier, Aliclik, Swayp, Tanders, la mesa manual): «salida activa se considera siempre y cuando el pedido esté en
+  preparación, en ruta o reprogramado. Si ya reportaron que el cliente no contesta, anulado, cancelado, cualquier motivo
+  que implique que ya no lo van a entregar ese mismo día de la ruta, ya no es activa. Tampoco cuando no hay reporte
+  pasado el día de la ruta: si hoy no reportaron nada, mañana deja de ser activa». Y sus respuestas: reprogramada sigue
+  activa; sin reporte deja de serlo **al día siguiente**; vale **para todos**.
+  - **Activa:** por preparar, pendiente o en ruta, sin devolver; también reprogramada (Aliclik `RESCHEDULED`, GF
+    `INCIDENT:RESCHEDULE_REQUESTED`, o con día agendado `next_followup_at` de hoy en adelante).
+  - **No activa:** anulada, entregada, transferida o devuelta (`custody_state = devuelto` o `returned_at`); una «por
+    definir» todavía en casa (la guía se le escribe encima); la que su courier ya reportó como no entregada y no está
+    reprogramada (Aliclik `NOT_RESPOND`/`REFUSED`/`CANCEL`/`ANNULLED` o que ya vuelve; Swayp en devolución 8/9/12;
+    Tanders `RETURNING`/`RETURNED`; GF `INCIDENT`/`REFUSED`/`RETURNING`; Grupo GF con «No entregado»); y la que sigue
+    en ruta **sin reporte pasado el día de su ruta**. El día de su ruta es el último cambio de estado que reportó su
+    courier (Actividad, `courier_status`; así una caja que el courier vuelve a recoger hoy sigue activa) o, si el
+    courier no reportó nada, cuando salió. Agencia (Shalom, Olva), que viaja varios días, no se vence por día.
+  - Lo que no se leyó no la vuelve inactiva: sin fechas, o sin leer el último reporte de un courier con API, cuenta
+    como activa (lado seguro).
+  - Decide si **otro** courier puede salir: la guía GF no se crea con otra activa (§29.17), la de Aliclik anula la GF
+    activa sin motorizado, y la salida adicional pide motivo solo con otra activa (`puertaDeSalidaAdicional`). Repetir
+    el **mismo** courier sigue con su regla de antes: no se crea otra guía de Aliclik sobre una que espera su
+    reprogramación.
+  - Regla pura `salidaActiva` (lib/shipment-output.ts) y `withLastCourierChange` (lib/salida-activa-server.ts);
+    pruebas en `test/salida-activa.test.ts`. Antes, la guía de Aliclik con «no contesta» y la que seguía en ruta sin
+    reporte seguían contando como activas (#KP207468 salió con Aliclik y con GF el mismo día).
 - Si una salida entrega, las demás salidas activas deben generar una tarea
   urgente para Daysi: avisar al courier o motorizado y cancelar la entrega.
 
@@ -20828,7 +20852,7 @@ panel suelto y su entrada «GF Courier» en el índice de la ficha se retiraron.
   genera una guía de Tander o Fénix? Sigue fallando y ya lo habíamos pedido»).** El 19-11 la guía de Aliclik anuló sola
   la guía GF, como dice la regla de abajo; el 20-11 una persona creó desde la Mesa de ruta una segunda guía GF (`-S2`)
   con la de Aliclik en ruta, porque crear una guía GF solo miraba otra guía GF. Las dos salieron a reparto el 23-11 y
-  GF la anuló a mano («salió con Tander»). Ahora, con una salida **pendiente, en ruta o por preparar, sin devolver** de
+  GF la anuló a mano («salió con Tander»). Ahora, con una salida **activa** (§4, «Qué es una salida activa») de
   Aliclik, Swayp (Fénix), Tanders, Shalom, Olva, Axel o Urpi, `createGfGuideFor` no crea la guía GF y dice cuál
   («Aliclik ya tiene una salida activa en este pedido (guía …): no se crea la guía de GF Courier. Anúlala o ciérrala
   primero.»), y la tarjeta de GF de la Mesa de ruta sale bloqueada con el mismo texto. Vale para la tarjeta, Repro Lima

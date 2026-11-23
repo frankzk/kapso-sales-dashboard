@@ -8,6 +8,7 @@ import {
   canRepeatCourier,
   isFillableRouteOutput,
   pickFillableRouteOutput,
+  salidaActiva,
 } from "@/lib/shipment-output";
 
 export type RouteKey =
@@ -57,6 +58,11 @@ export interface RouteOutputSnapshot {
   outputNumber?: number | null;
   /** El envío que cotizó el courier; la tarjeta de GF Courier lo dice junto a su guía. */
   quotedCost?: number | null;
+  /** Para «salida activa» de otro courier (owner, 23-11-2026, `salidaActiva`). */
+  returnedAt?: string | null;
+  nextFollowupAt?: string | null;
+  dispatchedAt?: string | null;
+  lastCourierChangeAt?: string | null;
 }
 
 /**
@@ -323,6 +329,21 @@ function isActive(output: RouteOutputSnapshot): boolean {
 }
 
 /**
+ * ¿Activa para OTRO courier? (owner, 23-11-2026). La definición única de `salidaActiva`: en preparación, en ruta o
+ * reprogramada; no si su courier ya reportó que no la entregó ni si sigue en ruta sin reporte pasado el día de su
+ * ruta. `isActive` sigue decidiendo si se repite el MISMO courier.
+ */
+function isActiveForOther(output: RouteOutputSnapshot): boolean {
+  return salidaActiva({
+    courier: output.courier, delivery_status: output.deliveryStatus, guide_code: output.guideCode ?? null,
+    custody_state: output.custodyState ?? null, reported_status: output.reportedStatus ?? null, swayp_state: output.swaypState ?? null,
+    created_via: output.createdVia ?? null, custody_transferred_at: output.custodyTransferredAt ?? null,
+    returned_at: output.returnedAt ?? null, next_followup_at: output.nextFollowupAt ?? null,
+    dispatched_at: output.dispatchedAt ?? null, last_courier_change_at: output.lastCourierChangeAt ?? null,
+  });
+}
+
+/**
  * ¿Esta salida se rellenará al crear la guía?
  *
  * Traduce el snapshot en camelCase a la fila que esperan los predicados, y
@@ -391,7 +412,7 @@ function gfCourierCandidate(input: OrderRoutePlanInput): RouteCandidate {
   // Con una salida activa de otro courier no se crea la de GF (owner, 23-11-2026, #KP207468): misma regla que el
   // servidor (`otherCourierBlocksGf`). No se nombra como `blockingOutput`: su «Anular guía» es solo para la de GF.
   const other = hasActiveWith(input, "gf_courier") ? null : input.outputs.find(
-    (output) => otherCourierLabel(output.courier) !== null && isActive(output) && output.deliveryStatus !== "entregado",
+    (output) => otherCourierLabel(output.courier) !== null && isActiveForOther(output),
   );
   const blockedReason = hasActiveWith(input, "gf_courier") ? null
     : other ? gfBlockedByOtherCourierText(otherCourierLabel(other.courier)!, other.guideCode ?? null)
@@ -417,7 +438,7 @@ function hasActiveWith(input: OrderRoutePlanInput, key: RouteKey): boolean {
 function withGfHandover(route: RouteCandidate, input: OrderRoutePlanInput): RouteCandidate {
   if (route.key !== "aliclik" || route.availability === "blocked") return route;
   const liveGf = input.outputs.filter(
-    (output) => courierKey(output.courier) === "gf_courier" && isActive(output) && output.deliveryStatus !== "entregado",
+    (output) => courierKey(output.courier) === "gf_courier" && isActiveForOther(output) && output.deliveryStatus !== "entregado",
   );
   if (liveGf.length === 0) return route;
   const code = liveGf.map((output) => output.guideCode).filter(Boolean).join(", ");

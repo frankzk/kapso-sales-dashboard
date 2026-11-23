@@ -1,4 +1,5 @@
 import "server-only";
+import { withLastCourierChange } from "@/lib/salida-activa-server";
 import { gfCancelRequestedText } from "@/lib/gf-courier-status";
 
 // Cotizar y crear una guía en Aliclik: el núcleo que comparten el botón del
@@ -283,7 +284,7 @@ async function readAliclikOutputPolicy(
   admin: SupabaseClient, ctx: AliclikContext, motivo?: string | null, origin?: AliclikGuideOrigin,
 ) {
   const { data, error } = await admin.from("shipments")
-    .select("id,guide_code,output_code,delivery_status,courier,created_via,custody_state,custody_transferred_at,swayp_state,returned_at")
+    .select("id,guide_code,output_code,delivery_status,courier,created_via,custody_state,custody_transferred_at,swayp_state,returned_at,reported_status,next_followup_at,out_for_delivery_at,dispatched_at")
     .eq("order_id", ctx.row.order_id);
   // `unread`: no se pudo leer, no es la regla. Quien reintenta (la pasada de
   // Lima) lo distingue de un «no» de verdad (`aliclikCreateGates`).
@@ -291,7 +292,8 @@ async function readAliclikOutputPolicy(
     ok: false as const, pideMotivo: false, estorban: [], unread: true as const,
     error: `No se pudieron leer las salidas del pedido: ${error.message}`,
   };
-  const outputs = (data ?? []) as AliclikExistingOutput[];
+  // El último reporte de cada guía decide si sigue activa (owner, 23-11-2026, `salidaActiva`).
+  const outputs = await withLastCourierChange(admin, ctx.row.order_id, (data ?? []) as AliclikExistingOutput[]);
   // La última parada de cada caja de Grupo GF que el motorizado tiene: con
   // «No entregado» reportado ya no estorba (16-11-2026, #AUR900778). Sin poder
   // leerla, cuenta como antes.

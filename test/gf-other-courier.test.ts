@@ -19,6 +19,12 @@ describe("guía GF con otro courier en curso", () => {
     expect(otherCourierBlocksGf([{ courier: "urpi", delivery_status: "por_preparar" }])).toContain("Urpi ya tiene");
   });
 
+  it("no cuenta la que su courier ya reportó como no entregada ni la que sigue en ruta sin reporte desde ayer", () => {
+    expect(otherCourierBlocksGf([{ courier: "aliclik", delivery_status: "en_ruta", reported_status: "NOT_RESPOND · PICKED" }], "2026-11-23")).toBeNull();
+    expect(otherCourierBlocksGf([{ courier: "aliclik", delivery_status: "en_ruta", reported_status: "PENDING_DELIVERY · PICKED", last_courier_change_at: "2026-11-22T15:00:00Z" }], "2026-11-23")).toBeNull();
+    expect(otherCourierBlocksGf([{ courier: "aliclik", delivery_status: "en_ruta", reported_status: "RESCHEDULED · PICKED", last_courier_change_at: "2026-11-22T15:00:00Z" }], "2026-11-23")).toContain("Aliclik ya tiene");
+  });
+
   it("no cuentan: entregada, anulada, devuelta, Grupo GF (propio), por definir ni otra de GF", () => {
     expect(otherCourierBlocksGf([
       { courier: "aliclik", delivery_status: "entregado" },

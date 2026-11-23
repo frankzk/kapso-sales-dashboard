@@ -340,7 +340,11 @@ describe("4. «Desde la lista» ofrece lo que otro courier no entregó", () => {
   });
 
   it("con la caja todavía volviendo, la salida nueva es adicional y su motivo se escribe solo", () => {
-    const outputs = [{ courier: "tanders", delivery_status: "en_ruta", custody_state: "retorno", output_code: "KP135035-S01", reported_status: "RETURNING" }];
+    // Owner, 23-11-2026 (`salidaActiva`): la guía que su courier ya reportó como devuelta («RETURNING») ya no es activa,
+    // así que no pide motivo; la que sigue en ruta hoy, sí.
+    const reportadaDevuelta = [{ courier: "tanders", delivery_status: "en_ruta", custody_state: "retorno", output_code: "KP135035-S01", reported_status: "RETURNING" }];
+    expect(puertaDeSalidaAdicional({ courier: "propio", operation: "lima", outputs: reportadaDevuelta, motivo: null }).ok).toBe(true);
+    const outputs = [{ courier: "tanders", delivery_status: "en_ruta", custody_state: "courier", output_code: "KP135035-S01", reported_status: "PICKED", custody_transferred_at: new Date().toISOString() }];
     // Sin motivo, la regla del §9 lo pediría…
     expect(puertaDeSalidaAdicional({ courier: "propio", operation: "lima", outputs, motivo: null }).ok).toBe(false);
     // …y el reintento lo trae escrito.

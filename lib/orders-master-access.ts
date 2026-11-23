@@ -1334,6 +1334,9 @@ export async function getOrderMasterDetail(
     }),
   ]);
   const puntoSource = orderPuntoSource(orderRow?.raw, row.order_total);
+  // Último cambio de estado que reportó cada courier (Actividad, `courier_status`), para «salida activa».
+  const lastCourierChange = new Map<string, string>();
+  for (const e of events) if (e.kind === "courier_status" && e.guide_code && (lastCourierChange.get(e.guide_code) ?? "") < e.occurred_at) lastCourierChange.set(e.guide_code, e.occurred_at);
   return {
     row,
     guides,
@@ -1431,6 +1434,11 @@ export async function getOrderMasterDetail(
         outputCode: guide.output_code ?? null,
         outputNumber: guide.output_number ?? null,
         quotedCost: guide.quoted_delivery_cost ?? null,
+        // «Salida activa» de otro courier (owner, 23-11-2026, `salidaActiva`): su último reporte sale de la Actividad.
+        returnedAt: guide.returned_at ?? null,
+        nextFollowupAt: guide.next_followup_at ?? null,
+        dispatchedAt: guide.dispatched_at ?? null,
+        lastCourierChangeAt: lastCourierChange.get(guide.guide_code ?? "") ?? null,
       })),
     }),
   };

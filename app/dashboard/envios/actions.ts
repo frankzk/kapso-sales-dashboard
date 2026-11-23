@@ -1,5 +1,6 @@
 "use server";
 
+import { withLastCourierChange } from "@/lib/salida-activa-server";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -1641,7 +1642,7 @@ export async function previewDirectFenixGuide(input: {
   const mapaSwayp = await cargarMapaSwayp(admin, order.store_id);
   const unlinked = productosSinVinculo(lineItems, mapaSwayp);
 
-  const guides = await findGuidesOfOrder(admin, order);
+  const guides = await withLastCourierChange(admin, order.id, await findGuidesOfOrder(admin, order));
   // Una salida «por definir» no estorba: la guía se le escribe encima. Se
   // separa de las que sí bloquean para no pedir que anulen algo que se va a
   // aprovechar — y para nombrar cuál se va a rellenar.

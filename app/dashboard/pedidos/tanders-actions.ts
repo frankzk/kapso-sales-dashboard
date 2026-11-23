@@ -10,6 +10,7 @@
 // El punto del mapa es obligatorio para Tanders y NO se resuelve solo: lo
 // confirma el operador. Ver lib/geo-link.ts.
 
+import { withLastCourierChange } from "@/lib/salida-activa-server";
 import { shopifyOrderNote } from "@/lib/shopify-address";
 import { terminalOrderBlocker } from "@/lib/order-status";
 import { revalidatePath } from "next/cache";
@@ -125,10 +126,10 @@ async function salidasDelPedido(
   const { data } = await admin
     .from("shipments")
     .select(
-      "courier,guide_code,output_code,delivery_status,created_via,custody_state,custody_transferred_at",
+      "courier,guide_code,output_code,delivery_status,created_via,custody_state,custody_transferred_at,reported_status,swayp_state,returned_at,next_followup_at,out_for_delivery_at,dispatched_at",
     )
     .eq("order_id", orderId);
-  return (data as SalidaExistente[] | null) ?? [];
+  return withLastCourierChange(admin, orderId, (data as SalidaExistente[] | null) ?? []);
 }
 
 /**
