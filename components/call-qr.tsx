@@ -43,12 +43,12 @@ export function CallQr({ phone, size = 84 }: { phone: string; size?: number }) {
         shapeRendering="crispEdges"
         role="img"
         aria-label={`Código QR para llamar al +${phone}`}
-        className="rounded-md border border-slate-200 bg-white"
+        className="rounded-md border border-line bg-white"
       >
         <rect x={-m} y={-m} width={box} height={box} fill="#ffffff" />
-        <path d={qr.d} fill="#0f172a" />
+        <path d={qr.d} fill="#1a1b25" />
       </svg>
-      <span className="text-[10px] font-medium text-slate-400">escanea y llama</span>
+      <span className="text-[11px] font-medium text-ink-500">escanea y llama</span>
     </div>
   );
 }
