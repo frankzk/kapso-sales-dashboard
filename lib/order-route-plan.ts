@@ -1,3 +1,4 @@
+import { gfBlockedByOtherCourierText, otherCourierLabel } from "@/lib/gf-other-courier";
 import { ADELANTO_MINIMO_LABEL } from "@/lib/adelanto-minimo";
 import type { OperationKind } from "@/lib/order-macro-stage";
 import { sameDayCutoffLabel, sameDayCutoffMinute, type GroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier";
@@ -387,7 +388,14 @@ function groupGfCandidate(input: OrderRoutePlanInput, minute: number): RouteCand
  * necesita para ofrecer «Anular guía».
  */
 function gfCourierCandidate(input: OrderRoutePlanInput): RouteCandidate {
-  const blockedReason = hasActiveWith(input, "gf_courier") ? null : input.gfCourier?.blockedReason ?? null;
+  // Con una salida activa de otro courier no se crea la de GF (owner, 23-11-2026, #KP207468): misma regla que el
+  // servidor (`otherCourierBlocksGf`). No se nombra como `blockingOutput`: su «Anular guía» es solo para la de GF.
+  const other = hasActiveWith(input, "gf_courier") ? null : input.outputs.find(
+    (output) => otherCourierLabel(output.courier) !== null && isActive(output) && output.deliveryStatus !== "entregado",
+  );
+  const blockedReason = hasActiveWith(input, "gf_courier") ? null
+    : other ? gfBlockedByOtherCourierText(otherCourierLabel(other.courier)!, other.guideCode ?? null)
+    : input.gfCourier?.blockedReason ?? null;
   return candidate(
     "gf_courier",
     "Según la programación de GF",

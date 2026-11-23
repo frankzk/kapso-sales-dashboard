@@ -20823,7 +20823,18 @@ panel suelto y su entrada «GF Courier» en el índice de la ficha se retiraron.
 - La guía viva se nombra también si la tienda apagó la API o si el pedido no es de Lima.
 - **Sin tope de salidas** (owner, 15-11-2026: «una guía por día, despachada por día»): cerrada la anterior (entregada,
   anulada o devuelta), se crea la siguiente (`-S2`, `-S3`…). Las cinco salidas de §4 no la frenan
-  (`canRepeatCourier`). Lo único que frena es la guía GF viva.
+  (`canRepeatCourier`). Lo único que frena es la guía GF viva **o una salida activa de otro courier** (abajo).
+- **Con otro courier en curso no se crea la guía GF (owner, 23-11-2026, #KP207468: «¿no se anula en automático si se
+  genera una guía de Tander o Fénix? Sigue fallando y ya lo habíamos pedido»).** El 19-11 la guía de Aliclik anuló sola
+  la guía GF, como dice la regla de abajo; el 20-11 una persona creó desde la Mesa de ruta una segunda guía GF (`-S2`)
+  con la de Aliclik en ruta, porque crear una guía GF solo miraba otra guía GF. Las dos salieron a reparto el 23-11 y
+  GF la anuló a mano («salió con Tander»). Ahora, con una salida **pendiente, en ruta o por preparar, sin devolver** de
+  Aliclik, Swayp (Fénix), Tanders, Shalom, Olva, Axel o Urpi, `createGfGuideFor` no crea la guía GF y dice cuál
+  («Aliclik ya tiene una salida activa en este pedido (guía …): no se crea la guía de GF Courier. Anúlala o ciérrala
+  primero.»), y la tarjeta de GF de la Mesa de ruta sale bloqueada con el mismo texto. Vale para la tarjeta, Repro Lima
+  y el reintento del cron; la guía GF automática ya no tocaba pedidos con guía de otro courier. Grupo GF («propio») y
+  las salidas por definir no cuentan. Regla pura en `lib/gf-other-courier.ts`; pruebas en
+  `test/gf-other-courier.test.ts` y `test/order-route-plan.test.ts`.
 
 **GF Courier → Aliclik (owner, 15-11-2026).** Si una persona decide mandar por Aliclik (AUTOECOM) un pedido que ya
 tiene guía GF viva, **Kapta anula sola la de GF** al crear la de Aliclik (`aliclikOutputPolicy` → `gfToCancel`,
