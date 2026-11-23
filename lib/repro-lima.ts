@@ -838,6 +838,16 @@ export function boxLocationLabel(box: BoxLocation): string {
   }
 }
 
+/**
+ * La caja dicha en corto para la lista de Repro Lima (owner, 23-11-2026: «un
+ * solo chip por salida»): «Salida de GF Courier en oficina · la recoge GF
+ * Courier» pasa a «Caja en oficina»; el courier ya va en «Fecha agendada». Lo
+ * demás queda como `boxLocationLabel`. Pura.
+ */
+export function compactBoxLabel(box: BoxLocation, label: string): string {
+  return box.kind === "con_courier" && box.enOficina ? "Caja en oficina" : label;
+}
+
 // ---------------------------------------------------------------------------
 // Programa de Grupo GF y materialización
 // ---------------------------------------------------------------------------

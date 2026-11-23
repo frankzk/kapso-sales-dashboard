@@ -85,6 +85,7 @@ import {
   REPRO_COURIER_LABEL,
   REPRO_LIST_LABEL,
   REPRO_OUTCOME_LABEL,
+  compactBoxLabel,
   type AgreementStateKind,
   type BoxAction,
   type BoxLocation,
@@ -153,8 +154,11 @@ export function photoHref(path: string): string {
 }
 
 /** El fallo en una línea (§11.7); en `crit-fg` si lo rechazó en la puerta. */
-export function FailureLine({ row, className }: { row: ReproRow; className?: string }) {
+export function FailureLine({ row, className, compact = false }: { row: ReproRow; className?: string; compact?: boolean }) {
   if (row.attentionContext === "pending") {
+    // En la lista (owner, 23-11-2026: «menos texto») no se repite: el día y el
+    // courier van en «Fecha agendada» y lo que toca, en «Próximo paso».
+    if (compact) return null;
     // Con la salida viva ya no falta confirmar fecha ni courier (owner,
     // 13-11-2026; MOM §9.5): lo dice, y no pide gestión. Si es de otro courier
     // que el acordado, cuenta igual y avisa cuál se acordó (owner, 15-11-2026).
@@ -230,17 +234,20 @@ const CHIP_TONE: Record<ReproChipKey, BadgeTone> = {
  * lista (llamada que toca, fecha pedida, programa sin acuerdo), las llamadas
  * sin respuesta y la sugerencia de cerrar. Siempre con texto (§ Estados).
  */
-export function ReproRowChips({ row, today }: { row: ReproRow; today: string }) {
+/** El estado del acuerdo que la lista no repite: su día y su courier ya van en «Fecha agendada». */
+const STATE_SHOWN_IN_DATE = new Set(["programado", "salida_creada"]);
+
+export function ReproRowChips({ row, today, compact = false }: { row: ReproRow; today: string; compact?: boolean }) {
   const chips: Array<{ key: string; tone: BadgeTone; text: string }> = [];
   if (row.list === "cerrados" && row.closed) {
     const day = limaStamp(row.closed.at, today);
     chips.push({ key: "cerrado", tone: "neutral", text: `Desarmar y cerrar${row.closed.byName ? ` · ${row.closed.byName}` : ""}${day ? ` · ${day}` : ""}` });
     chips.push({ key: "anula", tone: "neutral", text: "Espera que la tienda anule la venta" });
   }
-  if (row.agreement && row.state.kind !== "sin_acuerdo") {
+  if (row.agreement && row.state.kind !== "sin_acuerdo" && !(compact && STATE_SHOWN_IN_DATE.has(row.state.kind))) {
     chips.push({ key: "estado", tone: stateTone(row.state.kind), text: row.stateLabel });
   }
-  chips.push({ key: "caja", tone: boxTone(row.box), text: row.boxLabel });
+  chips.push({ key: "caja", tone: boxTone(row.box), text: compact ? compactBoxLabel(row.box, row.boxLabel) : row.boxLabel });
   for (const chip of row.chips) {
     const tone = chip.key === "toca_llamar"
       ? (row.overdue ? "warn" : "info")
@@ -251,7 +258,11 @@ export function ReproRowChips({ row, today }: { row: ReproRow; today: string }) 
   }
   if (row.noAnswerCount > 0 || row.lastCall) {
     const when = row.lastCall ? limaStamp(row.lastCall.at, today) : null;
-    const last = when ? `última ${when}${row.lastCall?.byName ? `, ${row.lastCall.byName}` : ""}` : null;
+    const last = when
+      ? compact
+        ? `${when}${row.lastCall?.byName ? ` · ${row.lastCall.byName}` : ""}`
+        : `última ${when}${row.lastCall?.byName ? `, ${row.lastCall.byName}` : ""}`
+      : null;
     const text = row.noAnswerCount > 0
       ? [`${row.noAnswerCount} sin respuesta`, last].filter(Boolean).join(" · ")
       : `Llamada ${last ?? ""}`.trim();

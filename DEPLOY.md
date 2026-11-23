@@ -85,6 +85,15 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 23-11-2026 · Repro Lima: la lista con menos texto (sin migración, MOM §9.5)
+
+Sin migración ni variables. En la lista de Repro Lima cada dato va en un solo lugar: «Próximo paso» lleva una raya si
+el pedido solo espera su día; «Fecha agendada» dice «mié 25/11» y debajo «GF Courier · acordado»; «Qué pasa» no repite
+el chip del acuerdo ni la línea «Listo: sale con…»; el historial dice «0 intentos» o «2 intentos · salió con …». La
+ficha del pedido no cambia.
+
+Verificar: en Repro Lima, #KP207897 dice «mié 25/11» con «GF Courier · acordado» debajo y una raya en «Próximo paso».
+
 ### 23-11-2026 · Reintentos Aliclik de Lima: la cadena dura 10 días (sin migración, MOM §9.5)
 
 Sin migración ni variables. La cadena de reintentos por Aliclik se cortaba a los 7 días del primer intento

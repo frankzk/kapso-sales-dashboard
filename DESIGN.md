@@ -524,6 +524,12 @@ El panel del equipo de Lima (MOM §9.5, «Repro Lima por las tareas del equipo»
 - **Ejecución de revisión** (19-11-2026): el historial recuperado desde visitas reportadas conserva el motorizado real y añade «Historial reconstruido desde rutas reportadas» en la fila, la situación completa y un filtro de su historial. La incidencia de una salida que sigue con el courier prevalece sobre un acuerdo de fecha anterior a hoy. Con varias guías externas vivas, el próximo paso pide conciliar guías y cajas antes de crear otra salida; la revisión permanece visible.
 - **Ruta vencida en la lista:** la «Fecha agendada» dice «Salió lun 16/11» en 14 px peso 500 `warn-fg` y debajo «Sin reporte» en 12 px `ink-500`, sin partir línea.
 
+**La lista, con menos texto (owner, 23-11-2026: «reducir la cantidad de texto»).** Cada dato en un solo lugar; la ficha del pedido sigue diciéndolo todo.
+- **Próximo paso:** solo si hay algo que hacer. Si el pedido solo espera su día, una raya «—» en 14 px `ink-400`; la frase va en el título y para el lector de pantalla.
+- **Fecha agendada:** el día en 13 px peso 500 («mié 25/11») y debajo, en 12 px `ink-500`, el courier y el origen en corto: «GF Courier · acordado», «Aliclik · recojo», «Grupo GF · programa». El origen largo va en el título.
+- **Qué pasa:** un chip por salida. El chip del acuerdo no se repite si la fecha ya lo dice («Programado», «Salida creada»); la caja en oficina de GF Courier dice «Caja en oficina»; la llamada, «Llamada hoy 19:00 · Daysi». Sin la línea «Listo: sale con…».
+- **Historial:** «0 intentos», «2 intentos · salió con Aliclik, GF Courier» en 12 px `ink-500`; la frase larga en el título. «Sugerido» ya no dice «por su distrito».
+
 **La lista, más clara (owner, 15-11-2026: «los colores y separaciones que se vean más claras»).**
 - **Cabecera de la tarjeta:** el título va en 16 px.
 - **Cabecera de la tabla:** fondo `wash` con hairline arriba y abajo, en 12 px peso 600 `ink-500`.
