@@ -1,12 +1,3 @@
-### 23-11-2026 · Leads: el buscador de productos de WooCommerce dice en qué catálogo buscó (sin migración)
-
-Sin migración ni variables. En una tienda WooCommerce, el buscador de «Generar pedido» sin resultados decía «o falta
-el permiso read_products», que es de Shopify. Ahora dice «No está en el catálogo publicado de WooCommerce de
-<tienda>. Si debería estar, publícalo allí con su SKU.» (la astaxantina es de Kenku y el lead era de Aurela).
-Shopify no cambia.
-
-Verificar: en un lead de Aurela, buscar «asta» en «Producto del catálogo» muestra el aviso con «Aurela».
-
 ### 14-11-2026 · GF Courier por API: reemplaza al reparto propio (0344, MOM §29.17)
 
 **Migración 0344_gf_courier_api: ya aplicada en producción (14-11-2026), antes del código.** Se aplicó con el nombre provisional 0342_gf_courier_api, que chocó con la 0342 de Compras entrada directo en `main`; el contenido es el mismo e idempotente, así que correr `db/apply.sql` otra vez no cambia nada. Agrega a `stores`
@@ -93,6 +84,15 @@ Verificar:
    `-S2` para el día nuevo. En la Agenda sale ese día.
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
+
+### 23-11-2026 · Leads: el buscador de productos de WooCommerce dice en qué catálogo buscó (sin migración)
+
+Sin migración ni variables. En una tienda WooCommerce, el buscador de «Generar pedido» sin resultados decía «o falta
+el permiso read_products», que es de Shopify. Ahora dice «No está en el catálogo publicado de WooCommerce de
+<tienda>. Si debería estar, publícalo allí con su SKU.» (la astaxantina es de Kenku y el lead era de Aurela).
+Shopify no cambia.
+
+Verificar: en un lead de Aurela, buscar «asta» en «Producto del catálogo» muestra el aviso con «Aurela».
 
 ### 21-11-2026 · Repro Lima carga más rápido (sin migración)
 
