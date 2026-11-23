@@ -17271,6 +17271,12 @@ estables:
      - **Desde qué número:** el de la tienda con que escribió la clienta en
        esa conversación (`phone_number_id`); si Kapso no lo dice, el número de
        WhatsApp de la tienda.
+     - **Si Kapso lo rechaza** (owner, 23-11-2026, #KP208482: «Kapso no lo
+       mandó: HTTP 422»): el aviso dice el motivo que respondió Kapso o Meta,
+       venga como venga (`kapsoSendFailure`), y si se intentó desde el número
+       principal de la tienda porque Kapso no devolvió el de la conversación.
+       La respuesta queda en los logs (`[kapso] envío rechazado`). Vale igual
+       para Leads y Chatby, que usan el mismo envío.
      - **Qué se manda:** texto, o una foto o un PDF (pegar con Ctrl+V,
        arrastrar o «Adjuntar foto o PDF») o «Enviar ticket Shalom (PDF)», con
        el texto como pie: los mismos adjuntos y reglas que Chatby

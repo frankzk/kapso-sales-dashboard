@@ -263,17 +263,54 @@ async function postWhatsappMessage(
     // us. Mark it ambiguous so callers do not auto-retry and duplicate a send.
     return { ok: false, error: e?.message ?? "network error", ambiguous: true };
   }
-  const json: any = await res.json().catch(() => null);
+  const raw = typeof res.text === "function" ? await res.text().catch(() => "") : "";
+  let json: any = null;
+  try {
+    json = raw ? JSON.parse(raw) : typeof res.json === "function" ? await res.json() : null;
+  } catch {
+    json = null;
+  }
   if (!res.ok) {
-    const err = json?.error ?? json?.errors?.[0] ?? {};
-    return {
-      ok: false,
-      error: err?.message ?? err?.title ?? `HTTP ${res.status}`,
-      code: typeof err?.code === "number" ? err.code : undefined,
-    };
+    const failure = kapsoSendFailure(json, raw);
+    // Lo que respondió Kapso, sin la clave ni el texto del mensaje: un 422 solo
+    // decía «HTTP 422» y no había cómo saber por qué (owner, 23-11-2026, #KP208482).
+    console.error(
+      `[kapso] envío rechazado HTTP ${res.status}`,
+      JSON.stringify({ phoneNumberId, type: payload.type ?? null, response: raw.slice(0, 600) }),
+    );
+    return { ok: false, error: failure.message ?? `HTTP ${res.status}`, code: failure.code };
   }
   const id = json?.messages?.[0]?.id;
   return { ok: true, id: typeof id === "string" ? id : null };
+}
+
+/**
+ * El motivo de un envío rechazado, venga como venga: el error de Meta
+ * (`{ error: { message, code, error_data: { details } } }`), el de Kapso como
+ * texto (`{ error: "…" }`), una lista (`{ errors: [{ detail }] }`), `{ message }`
+ * o un texto corto que no es JSON. Sin motivo legible, `message` es null y quien
+ * llama dice el código HTTP. Pura.
+ */
+export function kapsoSendFailure(json: unknown, raw = ""): { message: string | null; code?: number } {
+  const text = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const body = (json && typeof json === "object" ? json : {}) as Record<string, any>;
+  const first = Array.isArray(body.errors) ? body.errors[0] : undefined;
+  const err = body.error ?? first;
+  if (text(err)) return { message: text(err) };
+  if (err && typeof err === "object") {
+    const message = text(err.message) ?? text(err.error_user_msg) ?? text(err.detail) ?? text(err.title);
+    const details = text(err.error_data?.details);
+    const code = typeof err.code === "number" ? err.code : undefined;
+    if (message || details) {
+      return { message: message && details && !message.includes(details) ? `${message} · ${details}` : message ?? details, code };
+    }
+    if (code !== undefined) return { message: null, code };
+  }
+  const own = text(body.message) ?? text(body.detail);
+  if (own) return { message: own };
+  const plain = text(raw);
+  if (plain && !json && plain.length <= 200 && !plain.startsWith("<")) return { message: plain };
+  return { message: null };
 }
 
 /**
