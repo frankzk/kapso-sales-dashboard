@@ -13,7 +13,7 @@ import { limaClock } from "@/lib/grupo-gf-courier";
 import { loadLimaManagement } from "@/lib/lima-management-access";
 import { GF_AUTO_GUIDE_REASON } from "@/lib/gf-auto-guide";
 import { loadLimaReportedHistory } from "@/lib/lima-route-history-access";
-import { gfRescheduleAfterIncident, type GfWebhookTimelineRow } from "@/lib/gf-reschedule";
+import { gfLatestDeliveryDate, gfRescheduleAfterIncident, type GfWebhookTimelineRow } from "@/lib/gf-reschedule";
 import { isCustomerNovelty } from "@/lib/lima-stuck";
 
 type Admin = ReturnType<typeof createAdminSupabase>;
@@ -378,22 +378,41 @@ export function gfGuideDay(scheduled: string | null | undefined, estimated: stri
 async function loadGfGuideDays(admin: Admin, guides: ReadonlyMap<string, string>): Promise<Map<string, string>> {
   const days = new Map<string, string>();
   const codes = [...guides.keys()];
-  for (let offset = 0; offset < codes.length; offset += 500) {
-    const { data, error } = await admin.from("gf_order_requests")
-      .select("tracking_id,scheduled_date:request->>scheduled_date,estimated:response->>estimated_delivery_date")
-      .in("tracking_id", codes.slice(offset, offset + 500))
-      .eq("status", "sent");
-    if (error) throw new Error(`No pudimos leer los días pedidos a GF Courier: ${error.message}`);
-    for (const r of (data ?? []) as Array<{ tracking_id: string | null; scheduled_date: string | null; estimated: string | null }>) {
-      const orderId = r.tracking_id ? guides.get(r.tracking_id) : undefined;
-      // Sin día pedido (la guía GF automática de un pedido nuevo), la fecha
-      // estimada que GF devolvió al crearla (owner, 17-11-2026): así el pedido
-      // queda en Programados (Hoy, Mañana) y no «Con el courier» sin haber salido.
-      const day = gfGuideDay(r.scheduled_date, r.estimated);
-      if (!orderId || !ISO_DAY.test(day)) continue;
-      // Dos guías GF vivas no deberían existir; si existen, manda la más tardía.
-      if ((days.get(orderId) ?? "") < day) days.set(orderId, day);
-    }
+  // El pedido a GF y sus cambios de fecha, a la vez: ninguno espera al otro.
+  const [requests, changes] = await Promise.all([
+    inBatchesOf500(codes, async (batch) => {
+      const { data, error } = await admin.from("gf_order_requests")
+        .select("tracking_id,scheduled_date:request->>scheduled_date,estimated:response->>estimated_delivery_date")
+        .in("tracking_id", batch)
+        .eq("status", "sent");
+      if (error) throw new Error(`No pudimos leer los días pedidos a GF Courier: ${error.message}`);
+      return (data ?? []) as Array<{ tracking_id: string | null; scheduled_date: string | null; estimated: string | null }>;
+    }),
+    inBatchesOf500(codes, async (batch) => {
+      const { data, error } = await admin.from("gf_webhook_events")
+        .select("tracking_id,type,received_at,new_date:payload->data->>new_date")
+        .in("tracking_id", batch)
+        .eq("type", "order.delivery_date_changed");
+      if (error) throw new Error(`No pudimos leer los cambios de fecha de GF Courier: ${error.message}`);
+      return (data ?? []) as Array<GfWebhookTimelineRow & { tracking_id: string | null }>;
+    }),
+  ]);
+  const changesByGuide = new Map<string, GfWebhookTimelineRow[]>();
+  for (const c of changes) {
+    if (c.tracking_id) changesByGuide.set(c.tracking_id, [...(changesByGuide.get(c.tracking_id) ?? []), c]);
+  }
+  for (const r of requests) {
+    const orderId = r.tracking_id ? guides.get(r.tracking_id) : undefined;
+    // El último cambio de fecha que avisó GF manda (owner, 23-11-2026,
+    // #KP207897: acordado y movido al 25/11, la fila decía el lunes). Sin
+    // cambios, el día pedido o, sin él (la guía GF automática de un pedido
+    // nuevo), la fecha estimada que GF devolvió al crearla (owner, 17-11-2026):
+    // así el pedido queda en Programados y no «Con el courier» sin haber salido.
+    const changed = r.tracking_id ? gfLatestDeliveryDate(changesByGuide.get(r.tracking_id) ?? []) : null;
+    const day = changed ?? gfGuideDay(r.scheduled_date, r.estimated);
+    if (!orderId || !ISO_DAY.test(day)) continue;
+    // Dos guías GF vivas no deberían existir; si existen, manda la más tardía.
+    if ((days.get(orderId) ?? "") < day) days.set(orderId, day);
   }
   return days;
 }

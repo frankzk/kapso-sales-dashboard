@@ -7481,6 +7481,17 @@ entrados ese día). Ahora el día es el pedido a GF o, sin él, la
 con su guía, y si su día pasa sin recojo sigue la regla del recojo vencido.
 «Con el courier» queda para lo que ya salió.
 
+**Si GF cambió la fecha, manda el último cambio (23-11-2026).** Owner, sobre
+#KP207897: «si este es para el 25/11, ¿por qué sale como para mañana?». La guía
+se creó el 21/11 con fecha estimada 21/11. GF la movió al 23/11 (no contestó) y
+el acuerdo de Repro Lima, al 25/11 con la misma guía. La fila decía «lun 23/11»:
+el 21/11 corrido al lunes. El día de una guía GF que todavía no salió es ahora el
+último `order.delivery_date_changed` que avisó GF, lo pidiera GF o la tienda
+(`gfLatestDeliveryDate`, `lib/gf-reschedule.ts`). Sin cambios, el día pedido o la
+fecha estimada, como antes. Mientras la caja no sale, ningún cambio de estado
+(impresa, por asignar, asignada) cambia ese día. Medido ese día: 28 de 175 guías
+GF vivas de Lima tenían un cambio de fecha que no se leía.
+
 **«Nuevo» y la hora de entrada (17-11-2026).** El pedido que sale por primera
 vez —nunca salió a reparto y sin intentos, todavía en Por confirmar,
 Preparación o Por despachar (`limaIsNew`)— lleva la etiqueta **Nuevo** junto a

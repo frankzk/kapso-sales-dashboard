@@ -42,3 +42,30 @@ export function gfRescheduleAfterIncident(events: readonly GfWebhookTimelineRow[
   if (lastStatus === null || !reschedule || reschedule.time <= lastStatus) return null;
   return { date: reschedule.date, at: reschedule.at };
 }
+
+/**
+ * El día vigente de una guía GF que todavía no salió: el ÚLTIMO cambio de fecha
+ * que avisó GF (`order.delivery_date_changed`), lo pidiera GF o la tienda, o null
+ * si nunca cambió (owner, 23-11-2026, #KP207897: «si este es para el 25/11, ¿por
+ * qué sale como para mañana?»).
+ *
+ * El día de la guía salía del pedido original a GF (o de la fecha que GF estimó
+ * al crearla) y nunca se movía: GF lo reprogramó al 23/11 tras no contestar, el
+ * acuerdo en Repro Lima lo pasó al 25/11 con la misma guía, y la fila seguía con
+ * el 21/11 corrido al lunes. Medido ese día: 28 de 175 guías GF vivas de Lima con
+ * un cambio de fecha que no se leía.
+ *
+ * Solo para guías sin salir: mientras la caja no sale, ningún cambio de estado
+ * (impresa, por asignar, asignada) cambia el día que GF tiene para ella. Puro.
+ */
+export function gfLatestDeliveryDate(events: readonly GfWebhookTimelineRow[]): string | null {
+  let latest: { date: string; time: number } | null = null;
+  for (const e of events) {
+    if (e.type !== "order.delivery_date_changed") continue;
+    const time = Date.parse(e.received_at ?? "");
+    const date = (e.new_date ?? "").slice(0, 10);
+    if (!Number.isFinite(time) || !ISO_DAY.test(date)) continue;
+    if (!latest || time > latest.time) latest = { date, time };
+  }
+  return latest?.date ?? null;
+}

@@ -85,6 +85,14 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 23-11-2026 · Repro Lima: el día de la guía GF sigue el último cambio de fecha de GF (sin migración, MOM §9.5)
+
+Sin migración ni variables. El día de una guía GF que no salió salía del pedido original a GF (o de la fecha estimada)
+y no leía los cambios de fecha posteriores (`order.delivery_date_changed`). #KP207897, acordado y movido al 25/11,
+se veía «lun 23/11». Ahora manda el último cambio. Eran 28 de 175 guías GF vivas de Lima.
+
+Verificar: en Repro Lima, #KP207897 dice «mié 25/11» en la fecha agendada y «Lo recoge GF Courier el mié 25/11».
+
 ### 23-11-2026 · Leads: el buscador de productos de WooCommerce dice en qué catálogo buscó (sin migración)
 
 Sin migración ni variables. En una tienda WooCommerce, el buscador de «Generar pedido» sin resultados decía «o falta
