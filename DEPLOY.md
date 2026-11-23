@@ -85,6 +85,15 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 23-11-2026 · Reintentos Aliclik de Lima: la cadena dura 10 días (sin migración, MOM §9.5)
+
+Sin migración ni variables. La cadena de reintentos por Aliclik se cortaba a los 7 días del primer intento
+(`CHAIN_MAX_DAYS`); ahora a los 10. Los pedidos que vencieron entre el día 7 y el 10 vuelven a la bandeja «Reintentos
+Aliclik» y, con AUTOECOM en Activo, a la pasada automática.
+
+Verificar: los diez pedidos del sáb 14/11 con Alexis (#KP206166, #KP205423…) vuelven a «Reintentos Aliclik» hasta el
+24/11 a las 12:29.
+
 ### 23-11-2026 · Repro Lima: el día de la guía GF sigue el último cambio de fecha de GF (sin migración, MOM §9.5)
 
 Sin migración ni variables. El día de una guía GF que no salió salía del pedido original a GF (o de la fecha estimada)

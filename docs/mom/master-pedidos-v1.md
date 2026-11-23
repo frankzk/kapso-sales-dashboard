@@ -5580,9 +5580,13 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
   reintentar al día siguiente) y «FUERA DE COBERTURA» como dirección errada;
   el de
   Urpi, del resultado y el motivo en texto libre de su último reporte.
-- **Se corta** al fallar ALIDRIVER, a los 7 días del primer intento, si el
+- **Se corta** al fallar ALIDRIVER, a los 10 días del primer intento, si el
   pedido se anula, si sale de «Por reprogramar Lima» o si la tienda deja un
   acuerdo en Repro Lima para ese episodio (lo acordado manda).
+  - **Eran 7 días hasta el 23-11-2026** (`CHAIN_MAX_DAYS`). El owner los subió
+    a 10: diez pedidos que salieron con Alexis el sáb 14/11 a las 12:29
+    vencieron el 21/11 a esa misma hora, minutos antes de la pasada automática
+    por AUTOECOM, y quedaron para llamar.
 - **La guía de Aliclik deja en devolución la caja de Grupo GF (12-11-2026,
   decisión del owner: «de acuerdo»).** #KP203491: Alexis reportó KP203491-S01
   «No entregado · no contesta» el 07-11 y todavía la tenía (custodia
