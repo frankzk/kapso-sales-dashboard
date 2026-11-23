@@ -16,7 +16,7 @@
 // reprogramado (tienen su flujo), la dirección errada ni «sin dinero» (necesitan
 // a alguien antes de volver a salir). Los demás motorizados de Grupo GF, Swayp,
 // Axel y ALIDRIVER como primer intento no abren cadena. Se corta al tercer
-// fallo, a los 7 días del primero, si el pedido se anula o si la tienda acuerda
+// fallo, a los 10 días del primero (eran 7 hasta el 23-11-2026), si el pedido se anula o si la tienda acuerda
 // otra cosa en Repro Lima: en todos esos casos sigue Repro Lima como siempre.
 //
 // En la entrega 1 Kapta propone el siguiente intento y lo muestra en Repro Lima
@@ -47,8 +47,13 @@ export function stopChainReason(outcomeReason: string | null | undefined, note: 
   return outcomeReason ?? null;
 }
 
-/** Cuántos días desde el primer intento sigue abierta la cadena. */
-export const CHAIN_MAX_DAYS = 7;
+/**
+ * Cuántos días desde el primer intento sigue abierta la cadena. Eran 7; el
+ * owner los subió a 10 el 23-11-2026: diez pedidos que salieron con Alexis el
+ * sáb 14/11 vencieron el 21/11 a las 12:29, minutos antes de la pasada
+ * automática por AUTOECOM, y quedaron para llamar.
+ */
+export const CHAIN_MAX_DAYS = 10;
 
 /** El rider de Grupo GF cuyas rutas abren la cadena (owner, 03-11-2026). */
 export const CHAIN_GF_RIDER = "Alexis";

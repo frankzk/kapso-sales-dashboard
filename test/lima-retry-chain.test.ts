@@ -122,7 +122,11 @@ describe("limaRetryChain", () => {
   });
 
   it(`pasados ${CHAIN_MAX_DAYS} días desde el primer intento, vence`, () => {
-    expect(limaRetryChain([a("alexis", "no_contesta", "2026-10-26T17:00:00Z")], NOW)).toMatchObject({ state: "fuera", why: "vencida" });
+    // Owner, 23-11-2026: de 7 a 10 días.
+    expect(CHAIN_MAX_DAYS).toBe(10);
+    expect(limaRetryChain([a("alexis", "no_contesta", "2026-10-23T17:00:00Z")], NOW)).toMatchObject({ state: "fuera", why: "vencida" });
+    // A los 8 días ya estaba vencida con 7; con 10 sigue.
+    expect(limaRetryChain([a("alexis", "no_contesta", "2026-10-26T17:00:00Z")], NOW)).toMatchObject({ state: "siguiente" });
     expect(limaRetryChain([a("alexis", "no_contesta", "2026-10-29T17:00:00Z")], NOW)).toMatchObject({ state: "siguiente" });
   });
 
