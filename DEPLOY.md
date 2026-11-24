@@ -85,6 +85,16 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 24-11-2026 · Repro Lima: acordar con otro courier anula la guía GF (sin migración, MOM §9.5 y §29.17)
+
+Sin migración ni variables. Al guardar «Confirma fecha» con Aliclik, Swayp u otro courier que no es GF Courier, Kapta
+anula la guía GF viva sin motorizado (antes había que anularla a mano, #KP207918 y #KP200821). El caso conserva su
+acuerdo aunque el pedido pase a «Por reprogramar Lima» y queda en Programados con el día acordado. Con motorizado no se
+anula: se avisa.
+
+Verificar: un pedido con guía GF «Por asignar» acordado con Swayp para pasado mañana: la guía GF queda anulada («Nuevo
+acuerdo en Repro Lima: sale con Swayp») y el pedido aparece en Programados con ese día.
+
 ### 23-11-2026 · Repro Lima: «Ordenar» la lista (sin migración, MOM §9.5)
 
 Sin migración ni variables. La barra de la lista suma «Ordenar»: el orden del flujo (por defecto), fecha de creación,

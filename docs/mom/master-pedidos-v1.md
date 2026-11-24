@@ -20908,6 +20908,17 @@ tiene guía GF viva, **Kapta anula sola la de GF** al crear la de Aliclik (`alic
   avisan «Al crearla, Kapta anula la guía de GF Courier…».
 - **El automático no anula guías de nadie.** Una guía GF viva frena las guías automáticas de Aliclik (reintento de
   Lima incluido): lo decide una persona.
+- **El acuerdo de Repro Lima con otro courier lo decide una persona** (owner, 24-11-2026, #KP207918 y #KP200821:
+  «cuando generamos la reprogramación para dentro de unos días, no anula la guía de GF Courier ni tampoco lo pasó al
+  flujo del día: programados»). Al guardar «Confirma fecha» con Aliclik, Swayp u otro courier que no es GF Courier,
+  Kapta anula la guía GF viva sin motorizado (`releaseGfForAgreement`, motivo «Nuevo acuerdo en Repro Lima: sale con
+  Swayp», nota «Guía de GF Courier anulada por Kapta: la clienta acordó salir con Swayp el …»). Así GF no la saca en
+  su día y la guía del día programado (Kapta la crea la víspera o esa mañana) no se frena. Con motorizado no se anula:
+  el aviso pide a GF que la devuelva antes del día acordado. Si GF no la anula, el acuerdo queda guardado y el aviso
+  dice qué respondió. La hoja lo dice antes de guardar (`gfOtherCourierNote`).
+  - Sin guía viva el pedido entra en «Por reprogramar Lima». El caso de la atención no se cierra como «nuevo
+    intento»: pasa al episodio de la etapa con su acuerdo (condicionado a que siga abierto y con la misma llave) y
+    queda en Programados con el día acordado.
 
 **No entregado: se espera a GF (owner, 15-11-2026).** Una visita fallida deja la guía GF en incidencia, que sigue
 viva. No se crea otra guía GF encima: sale con la misma si GF la reprograma, o se crea la siguiente (`-S2`) cuando GF
