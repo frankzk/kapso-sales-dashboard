@@ -48,6 +48,8 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  // La versión con la que se compiló esta pestaña, para el aviso «Kapta tiene mejoras nuevas» (lib/app-version.ts).
+  env: { NEXT_PUBLIC_KAPTA_BUILD: process.env.VERCEL_GIT_COMMIT_SHA ?? "" },
   // Don't advertise the framework/version.
   poweredByHeader: false,
   // Server-only secrets must never be bundled for the client. We keep all

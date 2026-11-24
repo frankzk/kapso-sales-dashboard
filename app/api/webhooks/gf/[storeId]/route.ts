@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminSupabase } from "@/lib/db";
 import { gfCourier, verifyGfWebhook, type GfWebhookEnvelope } from "@/lib/gf-courier";
-import { loadGfStore } from "@/lib/gf-courier-guide";
+import { closeGhostGfGuide, loadGfStore } from "@/lib/gf-courier-guide";
 import { applyGfSnapshot } from "@/lib/gf-courier-track";
 import { gfWebhookNote } from "@/lib/gf-webhook-note";
 
@@ -56,6 +56,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ storeId: s
     const order = await admin.from("orders").select("store_id").eq("id", applied.orderId).maybeSingle();
     await admin.from("order_events").insert({ store_id: order.data?.store_id ?? storeId, order_id: applied.orderId, kind: "courier_report",
       occurred_at: new Date().toISOString(), actor: null, source: "gf_courier", courier: "gf_courier", guide_code: tracking, note });
+  }
+  // La caja volvió al almacén de GF y el pedido ya salió con otro courier por decisión de una persona (owner,
+  // 24-11-2026, lib/gf-ghost-guide.ts): la guía GF que quedó de más se anula sola. Nunca tumba el aviso.
+  if (applied.ok && applied.orderId) {
+    const ghost = await closeGhostGfGuide(admin, applied.orderId, current.data);
+    if (ghost.error) console.warn(`[gf-webhook] ${tracking}: la guía GF de más no se anuló: ${ghost.error}`);
   }
   return NextResponse.json({ ok: applied.ok, outcome: error?.code === "23505" ? "duplicate" : applied.outcome }, { status: applied.ok || applied.outcome === "unknown_order" ? 200 : 500 });
 }

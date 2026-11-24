@@ -13,7 +13,8 @@ import "server-only";
 //   4. La intención se escribe ANTES del POST; su índice único parcial impide dos intentos vivos.
 //   5. Un timeout NO es un fallo: la intención queda 'pending' y el reintento usa la MISMA Idempotency-Key, así que
 //      GF devuelve la misma guía. DUPLICATE_ORDER / IDEMPOTENCY_CONFLICT con tracking_id se ADOPTAN (la guía existe).
-import { otherCourierBlocksGf } from "@/lib/gf-other-courier";
+import { otherCourierBlocksGf, otherCourierLabel } from "@/lib/gf-other-courier";
+import { gfBoxBackInWarehouse, gfGhostCancelNote, gfGhostReplacedBy } from "@/lib/gf-ghost-guide";
 import { salidaActiva, type SalidaExistente } from "@/lib/shipment-output";
 import { SALIDA_ACTIVA_COLUMNS, withLastCourierChange } from "@/lib/salida-activa-server";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -347,4 +348,44 @@ export async function cancelInactiveGfGuides(
     : null;
   const parts = [cancelled.length ? `La guía de GF Courier ${cancelled.join(", ")} quedó anulada.` : null, leftOpenNotice].filter(Boolean);
   return { cancelled, leftOpen, notice: parts.length ? parts.join(" ") : null, leftOpenNotice };
+}
+
+/**
+ * La guía GF que quedó de más se anula sola (owner, 24-11-2026, `lib/gf-ghost-guide.ts`): GF ya tiene la caja en su
+ * almacén y el pedido salió con otro courier por decisión de una persona. `gf` es el estado actual que GF devolvió.
+ * Nunca lanza: lo llaman el webhook de GF y gf-reconcile, y un fallo aquí no puede tumbar su pasada.
+ */
+export async function closeGhostGfGuide(
+  admin: SupabaseClient, orderId: string, gf: GfOrder,
+): Promise<{ closed: boolean; replacedBy?: string; error?: string }> {
+  try {
+    if (!gfBoxBackInWarehouse(gf)) return { closed: false };
+    const tracking = (gf.tracking_id ?? "").trim();
+    const { data: rows, error } = await admin.from("shipments").select("courier,guide_code,delivery_status,returned_at,created_at").eq("order_id", orderId);
+    if (error) return { closed: false, error: error.message };
+    const gfRow = (rows ?? []).find((r) => r.courier === GF_COURIER && r.guide_code === tracking && ["pendiente", "en_ruta"].includes(r.delivery_status as string));
+    if (!gfRow) return { closed: false };
+    const others = (rows ?? []).filter((r) => r.courier !== GF_COURIER && r.guide_code);
+    if (!others.length) return { closed: false };
+    const { data: regs, error: regsError } = await admin.from("order_events").select("guide_code,actor")
+      .eq("order_id", orderId).eq("kind", "guide_registered").in("guide_code", others.map((o) => o.guide_code as string));
+    if (regsError) return { closed: false, error: regsError.message };
+    const byPerson = new Set(((regs ?? []) as { guide_code: string; actor: string | null }[]).filter((e) => e.actor).map((e) => e.guide_code));
+    const other = gfGhostReplacedBy({
+      gf, gfCreatedAt: gfRow.created_at as string,
+      others: others.map((o) => ({
+        courier: o.courier as string | null, guide_code: o.guide_code as string, delivery_status: o.delivery_status as string,
+        returned_at: o.returned_at as string | null, created_at: o.created_at as string, by_person: byPerson.has(o.guide_code as string),
+      })),
+    });
+    if (!other) return { closed: false };
+    const res = await cancelGfGuideFor(orderId, tracking, {
+      userId: null, reason: `Ya salió con ${otherCourierLabel(other.courier) ?? "otro courier"}`, note: gfGhostCancelNote(other),
+    }, admin);
+    if (!res.ok) return { closed: false, replacedBy: other.guide_code ?? undefined, error: res.error };
+    await recomputeOrderMasterSafe(admin, [orderId]);
+    return { closed: true, replacedBy: other.guide_code ?? undefined };
+  } catch (cause) {
+    return { closed: false, error: cause instanceof Error ? cause.message : String(cause) };
+  }
 }
