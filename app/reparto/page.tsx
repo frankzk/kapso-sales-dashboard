@@ -9,6 +9,7 @@ import { getMasterPermissions } from "@/lib/permissions-access";
 import { getRiderSheet, loadRiderVocabulary } from "@/lib/sheets/rider-access";
 import { limaDate } from "@/lib/sheets/resolver";
 import { CoordinatorReport } from "./coordinacion";
+import { NewVersionNotice } from "@/components/new-version-notice";
 
 export const dynamic = "force-dynamic";
 
@@ -87,6 +88,6 @@ export default async function RepartoPage({
       today={today}
       pickupMode={pickupMode}
       receptionPending={receptionPending}
-    /></>
+    /><NewVersionNotice /></>
   );
 }

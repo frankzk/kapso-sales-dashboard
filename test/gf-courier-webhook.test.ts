@@ -28,7 +28,9 @@ function admin() {
 vi.mock("@/lib/db", () => ({ createAdminSupabase: () => admin() }));
 vi.mock("@/lib/order-master", () => ({ recomputeOrderMasterSafe: vi.fn(async () => undefined) }));
 const store = { enabled: true, token: "tok", webhookSecret: "whsec_test" };
-vi.mock("@/lib/gf-courier-guide", () => ({ loadGfStore: async () => store }));
+// La guía GF de más (owner, 24-11-2026) se revisa después de aplicar el estado; aquí no hay otra guía.
+const closeGhostGfGuide = vi.fn(async () => ({ closed: false }));
+vi.mock("@/lib/gf-courier-guide", () => ({ loadGfStore: async () => store, closeGhostGfGuide }));
 const getOrder = vi.fn();
 vi.mock("@/lib/gf-courier", async (orig) => ({ ...(await orig<typeof import("@/lib/gf-courier")>()), gfCourier: { getOrder } }));
 

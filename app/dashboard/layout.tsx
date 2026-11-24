@@ -4,6 +4,7 @@ import { signOut } from "./actions";
 import { DashboardShell } from "@/components/dashboard-shell";
 import { OrderDrawerHost } from "@/components/order-drawer-host";
 import { AnuraPhoneProvider } from "@/components/anura-phone";
+import { NewVersionNotice } from "@/components/new-version-notice";
 import { canValidatePaymentsAnywhere } from "@/lib/payment-review-access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { createAdminSupabase } from "@/lib/db";
@@ -124,6 +125,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
             canManageLogistics: permissions.can("logistics.manage"),
           }}
         />
+        {/* «Kapta tiene mejoras nuevas»: invita a recargar una pestaña que quedó en una versión anterior. */}
+        <NewVersionNotice />
       </DashboardShell>
     </AnuraPhoneProvider>
   );

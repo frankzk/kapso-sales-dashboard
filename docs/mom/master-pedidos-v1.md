@@ -20878,6 +20878,20 @@ panel suelto y su entrada «GF Courier» en el índice de la ficha se retiraron.
   `aliclikOutputPolicy`), en Swayp antes, como la activa. Si GF no la anula (la caja sigue con el motorizado), la otra
   guía se crea igual y el aviso dice que la de GF sigue abierta, para anularla en «Salidas y guías» cuando vuelva. La
   guía GF **activa** sigue como antes: se anula o no se crea la otra.
+- **La guía GF que quedó de más se anula sola (owner, 24-11-2026, #KP206950 y #KP207043: «sí, ok»).** Cuando GF dice
+  que la caja ya volvió a su almacén (`INCIDENT` con la etapa `BACK_IN_WAREHOUSE`) y el pedido ya salió con otro
+  courier por decisión de una persona (una guía de Aliclik, Swayp u otro courier, creada por una persona **después**
+  de la guía GF, en preparación, en ruta o entregada), Kapta anula sola la guía GF: GF desarma la caja y el producto
+  vuelve al estante; la Actividad dice «anulada sola por Kapta… ya salió con <courier> (guía …)». Lo hace al llegar
+  el aviso de GF y en la pasada de gf-reconcile (por si el aviso se perdió o la caja volvió antes de esta regla). Es
+  la única excepción a «el automático no anula guías de nadie»: la decisión ya la tomó la persona que creó la otra
+  guía. Si la guía GF es la más nueva, la decisión vigente es GF y no se toca. Regla pura en `lib/gf-ghost-guide.ts`
+  (`gfGhostReplacedBy`), servidor `closeGhostGfGuide`; pruebas en `test/gf-ghost-guide.test.ts`.
+- **«Kapta tiene mejoras nuevas» (owner, 24-11-2026: «un aviso muy amigable»).** Vercel deja cada pestaña en la
+  versión con la que se abrió: el 23-11 una pestaña de antes de estos arreglos siguió diciendo «La guía ya salió con
+  un motorizado». Cada 5 minutos, y al volver a la pestaña, el panel y Reparto preguntan la versión publicada
+  (`/api/version`); si es otra, una tarjeta pequeña invita a recargar («Recargar» / «Ahora no», que la esconde media
+  hora). Nunca recarga sola (`components/new-version-notice.tsx`, `lib/app-version.ts`).
 - La guía viva se nombra también si la tienda apagó la API o si el pedido no es de Lima.
 - **Sin tope de salidas** (owner, 15-11-2026: «una guía por día, despachada por día»): cerrada la anterior (entregada,
   anulada o devuelta), se crea la siguiente (`-S2`, `-S3`…). Las cinco salidas de §4 no la frenan
