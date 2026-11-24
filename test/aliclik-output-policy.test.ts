@@ -1,6 +1,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+
+// Alexis tiene la caja HOY: sin reporte desde un día anterior ya no sería activa (owner, 23-11-2026, `salidaActiva`).
+const HOY = new Date().toISOString();
 import { aliclikOutputPolicy, type AliclikExistingOutput } from "@/lib/aliclik-output-policy";
 
 // KP200077: Alexis conserva la primera caja y todavía no reportó un resultado.
@@ -8,7 +11,7 @@ const alexis: AliclikExistingOutput = Object.freeze({
   id: "gf-output", courier: "propio",
   guide_code: "MOM-KP200077-PROPIO-EBFFA4E4", output_code: "KP200077-S01",
   delivery_status: "pendiente", created_via: "grupo_gf_courier",
-  custody_state: "courier", custody_transferred_at: "2026-10-26T17:35:29.019Z",
+  custody_state: "courier", custody_transferred_at: HOY,
 });
 const decide = (outputs: AliclikExistingOutput[], motivo: string | null = null,
   operation: "lima" | "provincia_cod" | "agencia" | "desconocida" = "lima", manual = true) =>
@@ -32,7 +35,7 @@ describe("Aliclik proactivo en Lima", () => {
     }
     expect(alexis.custody_state).toBe("courier");
     expect(alexis.delivery_status).toBe("pendiente");
-    expect(alexis.custody_transferred_at).toBe("2026-10-26T17:35:29.019Z");
+    expect(alexis.custody_transferred_at).toBe(HOY);
   });
 
   it("un motivo vacío no permite emitir", () => {

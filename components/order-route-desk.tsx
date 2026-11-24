@@ -165,7 +165,7 @@ export function OrderRouteDesk({
         {route.blockingOutput && (
           <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-600">
             <span className="font-semibold text-ink-700">
-              {shipmentIsReturning(route.blockingOutput) ? "Salida en devolución" : "Salida activa"}
+              {shipmentIsReturning(route.blockingOutput) ? "Salida en devolución" : route.blockingOutput.active === false ? "Sin entregar" : "Salida activa"}
             </span>
             {route.blockingOutput.guideCode && <GuideNumber value={route.blockingOutput.guideCode} />}
             {route.blockingOutput.shortCode && (

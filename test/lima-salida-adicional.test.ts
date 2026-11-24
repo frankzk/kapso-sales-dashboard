@@ -1,6 +1,9 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+
+// Con el motorizado HOY: sin reporte desde un día anterior ya no sería activa (owner, 23-11-2026, `salidaActiva`).
+const HOY = new Date().toISOString();
 import {
   nombreDeCourier,
   puertaDeSalidaAdicional,
@@ -27,7 +30,7 @@ const GRUPO_GF_EN_LA_CALLE: SalidaExistente = {
   output_code: "KP134416-S01",
   created_via: "grupo_gf_courier",
   custody_state: "courier",
-  custody_transferred_at: "2026-09-20T01:50:41Z",
+  custody_transferred_at: HOY,
 };
 
 /** #KP134960: «por definir» con la custodia ya fuera de casa. */
@@ -38,7 +41,7 @@ const POR_DEFINIR_FUERA: SalidaExistente = {
   output_code: "KP134960-S01",
   created_via: "mom_manual_route",
   custody_state: "courier",
-  custody_transferred_at: "2026-09-18T17:00:00Z",
+  custody_transferred_at: HOY,
 };
 
 /** Una «por definir» todavía en casa: la guía se le escribe encima. */
