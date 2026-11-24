@@ -56,6 +56,16 @@ describe("salida activa", () => {
     expect(salidaActiva({ courier: "shalom", delivery_status: "en_ruta", dispatched_at: at("2026-11-18") }, today)).toBe(true);
   });
 
+  it("con el motorizado aunque esté «pendiente»: reprogramada a un día que ya pasó y sin reporte, no activa (#AUR900765)", () => {
+    expect(salidaActiva({ courier: "propio", delivery_status: "pendiente", custody_state: "courier", created_via: "grupo_gf_courier",
+      custody_transferred_at: at("2026-11-14"), next_followup_at: at("2026-11-14", "17:00:00") }, today)).toBe(false);
+    // Se la llevó hoy: activa.
+    expect(salidaActiva({ courier: "propio", delivery_status: "pendiente", custody_state: "courier", created_via: "grupo_gf_courier",
+      custody_transferred_at: at(today) }, today)).toBe(true);
+    // En el almacén (empresa), pendiente: activa, aunque sea vieja (todavía no salió).
+    expect(salidaActiva({ courier: "propio", delivery_status: "pendiente", custody_state: "empresa", custody_transferred_at: at("2026-11-14") }, today)).toBe(true);
+  });
+
   it("salidasQueEstorban usa la misma definición", () => {
     const outputs = [aliclik("NOT_RESPOND · PICKED"), { courier: "axel", delivery_status: "en_ruta", custody_transferred_at: at(today) }];
     expect(salidasQueEstorban(outputs, today).map((o) => o.courier)).toEqual(["axel"]);

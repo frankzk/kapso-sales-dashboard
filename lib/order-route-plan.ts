@@ -84,6 +84,11 @@ export interface RouteBlockingOutput {
   swaypState: number | null;
   reportedStatus: string | null;
   quotedCost?: number | null;
+  /**
+   * ¿Sigue activa (`salidaActiva`, owner 23-11-2026)? Una que ya no lo es (su courier reportó que no la entregó, o
+   * sin reporte pasado su día) sigue frenando que se repita el MISMO courier, pero la mesa no la llama «activa».
+   */
+  active?: boolean;
 }
 
 export interface SwaypRouteCheck {
@@ -530,6 +535,7 @@ function applyOutputPolicy(
     // el paquete viene de regreso. Decirle a la operadora que la anule la manda
     // a cancelar en el panel del courier una devolución en curso.
     const vuelve = shipmentIsReturning(blocking);
+    const stillActive = isActiveForOther(blocking);
     return {
       ...route,
       recommended: false,
@@ -544,15 +550,16 @@ function applyOutputPolicy(
         // Despacho del día (06-10-2026, MOM §29.13): anularla gastaba el
         // consecutivo y obligaba a armar otra caja para el mismo paquete.
         : route.key === "propio"
-        ? `${route.label} ya tiene una salida activa en este pedido${blocking.outputCode ? ` (${blocking.outputCode})` : ""}. Si no se entregó, se reprograma con esa misma salida desde Despacho del día («Desde la lista»).`
+        ? `${route.label} ya tiene una salida ${stillActive ? "activa" : "sin entregar"} en este pedido${blocking.outputCode ? ` (${blocking.outputCode})` : ""}. Si no se entregó, se reprograma con esa misma salida desde Despacho del día («Desde la lista»).`
         : route.key === "gf_courier"
         ? "GF Courier ya tiene la guía de este pedido. GF solo la anula antes de prepararla; después sigue su estado en «Salidas y guías»."
         : route.key === "shalom"
         ? canRegisterShalomReplacement
           ? "Shalom no reconoce la guía activa. Si la caja salió con otra guía, usa «Ya la creé en Shalom Pro» para registrar la que la reemplaza."
           : "Shalom ya tiene una salida activa en este pedido. Continúa su seguimiento en «Salidas y guías»."
-        : `${route.label} ya tiene una salida activa en este pedido. Anúlala o ciérrala antes de crear otra.`,
+        : `${route.label} ya tiene una salida ${stillActive ? "activa" : "sin entregar"} en este pedido. Anúlala o ciérrala antes de crear otra.`,
       blockingOutput: {
+        active: stillActive,
         id: blocking.id,
         guideCode: blocking.guideCode ?? null,
         shortCode: blocking.shortCode ?? null,
@@ -655,7 +662,8 @@ function swaypCandidate(input: OrderRoutePlanInput, recommended: boolean): Route
  */
 export function buildOrderRoutePlan(input: OrderRoutePlanInput): OrderRoutePlan {
   const operation = input.operation;
-  const active = input.outputs.filter(isActive);
+  // Activas con la definición única (`salidaActiva`, owner 23-11-2026); las «por definir» se cuentan aparte (abajo).
+  const active = input.outputs.filter((o) => isActiveForOther(o) || (isActive(o) && isFillableSnapshot(o)));
   // Una salida «por definir» no cuenta como salida que estorba: crear la guía
   // del courier la RELLENA en vez de abrir otra (lib/route-output-fill.ts), así
   // que ni exige motivo ni gasta una del presupuesto de cinco. Separarlas es lo

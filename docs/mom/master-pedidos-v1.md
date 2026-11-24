@@ -310,6 +310,12 @@ Reglas:
     courier no reportó nada, cuando salió. Agencia (Shalom, Olva), que viaja varios días, no se vence por día.
   - Lo que no se leyó no la vuelve inactiva: sin fechas, o sin leer el último reporte de un courier con API, cuenta
     como activa (lado seguro).
+  - **Con el courier o el motorizado aunque Kapta la tenga «pendiente» (owner, 24-11-2026, #AUR900765: «¿por qué sigue
+    activa esta guía?»).** La caja de Grupo GF seguía con Yordani, reprogramada para el 14-11, y la guía GF tenía
+    «no contesta» desde el 17-11; la Mesa de ruta decía «2 activas». El día de la ruta vale también para la salida con
+    custodia del courier (`custody_state = courier`), y el día al que se reprogramó (`next_followup_at`) cuenta como día
+    de ruta si ya pasó. La Mesa de ruta cuenta las activas y avisa «sigue(n) activa(s)» con esta definición, y la salida
+    que solo frena repetir el mismo courier se nombra «Sin entregar», no «Salida activa».
   - Decide si **otro** courier puede salir: la guía GF no se crea con otra activa (§29.17), la de Aliclik anula la GF
     activa sin motorizado, y la salida adicional pide motivo solo con otra activa (`puertaDeSalidaAdicional`). Repetir
     el **mismo** courier sigue con su regla de antes: no se crea otra guía de Aliclik sobre una que espera su

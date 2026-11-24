@@ -307,6 +307,7 @@ describe("una salida viva bloquea repetir ese mismo courier", () => {
       courier: "shalom",
       swaypState: null,
       reportedStatus: null,
+      active: true,
     });
   });
 
@@ -573,6 +574,23 @@ describe("GF Courier por API en la mesa de ruta (MOM §29.17, owner 15-11-2026)"
     // Cerrada (entregada o devuelta), GF vuelve a estar disponible.
     const closed = lima({ gfCourier: gfOn, outputs: [{ id: "a1", courier: "aliclik", deliveryStatus: "en_ruta", custodyState: "devuelto" }] });
     expect(closed.candidates.find((route) => route.key === "gf_courier")?.availability).toBe("available");
+  });
+
+  it("#AUR900765: la guía GF con «no contesta» y la caja de Grupo GF reprogramada al 14-11 ya no son activas (owner, 24-11-2026)", () => {
+    const outputs = [
+      { id: "p1", courier: "propio", deliveryStatus: "pendiente", custodyState: "courier", guideCode: "MOM-AUR-PROPIO", outputCode: "AUR900765-S01",
+        createdVia: "grupo_gf_courier", custodyTransferredAt: "2026-11-14T16:07:59Z", nextFollowupAt: "2026-11-14T17:00:00Z" },
+      gfGuide("pendiente", { id: "g2", custodyState: "courier", reportedStatus: "INCIDENT:NO_ANSWER", custodyTransferredAt: "2026-11-17T17:32:03Z",
+        lastCourierChangeAt: "2026-11-17T21:36:57Z" }),
+    ];
+    const plan = lima({ gfCourier: gfOn, outputs });
+    expect(plan.activeOutputCount).toBe(0);
+    expect(plan.warnings.join(" ")).not.toContain("activa");
+    // Aliclik ya no la anula: no está activa.
+    expect(plan.candidates.find((route) => route.key === "aliclik")?.reason ?? "").not.toContain("anula la guía de GF");
+    // Repetir GF o Grupo GF sigue con su regla, pero la mesa no las llama «activas».
+    const gf = plan.candidates.find((route) => route.key === "gf_courier");
+    expect(gf?.blockingOutput?.active).toBe(false);
   });
 
   it("Grupo GF reaparece solo para nombrar una salida propia que sigue viva", () => {

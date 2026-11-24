@@ -530,9 +530,9 @@ export function salidaReprogramada(o: SalidaExistente, today: string = limaToday
   return Boolean(again && again >= today);
 }
 
-/** El día de su ruta: el último reporte de su courier o, sin él, cuando salió. */
+/** El día de su ruta: el último reporte de su courier, el día al que se reprogramó o, sin ellos, cuando salió. */
 export function diaDeRutaDeSalida(o: SalidaExistente): string | null {
-  const days = [o.last_courier_change_at, o.out_for_delivery_at, o.dispatched_at, o.custody_transferred_at]
+  const days = [o.last_courier_change_at, o.out_for_delivery_at, o.dispatched_at, o.custody_transferred_at, o.next_followup_at]
     .map(limaDay).filter((d): d is string => Boolean(d));
   return days.length ? days.sort()[days.length - 1]! : null;
 }
@@ -556,7 +556,10 @@ export function salidaActiva(o: SalidaExistente, today: string = limaToday()): b
   // Los couriers con reporte por API vuelven a recoger la caja otro día (#KP207468): sin leer su último reporte
   // (`withLastCourierChange`), la fecha de salida sola no la da por vencida.
   const porApi = ["aliclik", "fenix", "tanders", "gf_courier"].includes(canonCourier(o.courier));
-  if (o.delivery_status === "en_ruta" && !AGENCIA.has(canonCourier(o.courier)) && (!porApi || o.last_courier_change_at !== undefined)) {
+  // En ruta, o con el courier o motorizado aunque Kapta la tenga «pendiente» (#AUR900765: la caja de Grupo GF seguía
+  // con Yordani, reprogramada para el 14-11, y contaba como activa diez días después).
+  const conElCourier = o.delivery_status === "en_ruta" || o.custody_state === "courier";
+  if (conElCourier && !AGENCIA.has(canonCourier(o.courier)) && (!porApi || o.last_courier_change_at !== undefined)) {
     const day = diaDeRutaDeSalida(o);
     if (day && day < today) return false;
   }
