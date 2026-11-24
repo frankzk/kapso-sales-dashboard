@@ -80,6 +80,9 @@ import {
   REPRO_COURIER_LABEL,
   REPRO_GF_CANCEL_NOTE,
   REPRO_GF_CANCEL_REASON,
+  isLiveGfGuide,
+  reproGfOtherCourierNote,
+  reproGfOtherCourierReason,
   type BoxAction,
   type ReproChannel,
   type ReproChanges,
@@ -691,6 +694,70 @@ async function gfGuideForAgreement(admin: Admin, input: {
 }
 
 /**
+ * Otro courier en el acuerdo con una guía GF viva (owner, 24-11-2026, #KP207918 y #KP200821: «cuando generamos la
+ * reprogramación para dentro de unos días, no anula la guía de GF Courier ni tampoco lo pasó al flujo del día:
+ * programados»). Quien guarda el acuerdo decide el courier: Kapta anula al guardar la guía GF que todavía no tiene
+ * motorizado, como al crear la guía de Aliclik o Swayp a mano (`cancelLiveGfForOtherCourier`). Así GF no la saca en su
+ * día y la guía del día programado no se frena («el automático no la anula»). Con motorizado no se anula: se dice.
+ *
+ * Sin guía viva, el pedido entra en «Por reprogramar Lima» y el caso de la atención se cerraría como «nuevo intento»
+ * (`reproCaseProblem`) con el acuerdo recién guardado. No es otro intento: pasa al episodio de la etapa con su acuerdo
+ * y queda en Programados. Nunca lanza; lo que falla va al aviso.
+ */
+async function releaseGfForAgreement(admin: Admin, input: {
+  facts: ReproFacts;
+  caseRow: ReproCaseRow;
+  day: string;
+  courierName: string;
+  actor: string;
+}): Promise<{ note: string; error?: string }> {
+  const { facts: f, caseRow: c, day, courierName, actor } = input;
+  const live = f.outputs.filter(isLiveGfGuide);
+  if (!live.length) return { note: "" };
+  const before = `antes del ${programDayLabel(day)}`;
+  const assigned = live.find((output) => output.delivery_status === "en_ruta");
+  if (assigned) {
+    return {
+      note: "",
+      error: `GF Courier ya asignó la guía ${assigned.guide_code ?? "viva"} a un motorizado: Kapta no la anula. Pide a GF que la devuelva ${before}.`,
+    };
+  }
+  const cancelled: string[] = [];
+  for (const output of live) {
+    if (!output.guide_code) {
+      return { note: "", error: `La guía de GF Courier viva no tiene número: anúlala en la Mesa de ruta del pedido ${before}.` };
+    }
+    let res: GfCancelResult;
+    try {
+      res = await cancelGfGuideFor(f.orderId, output.guide_code, {
+        userId: actor,
+        reason: reproGfOtherCourierReason(courierName),
+        note: reproGfOtherCourierNote(courierName, day),
+      }, admin);
+    } catch (error) {
+      res = { ok: false, error: errorText(error) };
+    }
+    if (!res.ok) {
+      return { note: "", error: `GF Courier no anuló la guía ${output.guide_code}: ${sentence(res.error)} Anúlala en la Mesa de ruta del pedido ${before}.` };
+    }
+    if (res.requested) return { note: "", error: gfCancelRequestedText(output.guide_code) };
+    cancelled.push(output.guide_code);
+  }
+  await recomputeOrderMasterSafe(admin, [f.orderId]);
+  // El caso sigue con su acuerdo en el episodio de la etapa (condicionado: si otro ya lo cambió o cerró, no se pisa).
+  if (c.episode_key.startsWith("attention:")) {
+    const fresh = await factsOf(admin, f.orderId).catch(() => null);
+    if (fresh?.inStage && fresh.episode.key !== c.episode_key) {
+      const { error } = await admin.from("lima_repro_cases")
+        .update({ episode_key: fresh.episode.key, episode_at: fresh.episode.at ?? c.episode_at })
+        .eq("id", c.id).is("closed_at", null).eq("episode_key", c.episode_key);
+      if (error) console.error("repro-lima: el caso no pasó a la etapa", c.id, error.message);
+    }
+  }
+  return { note: ` La guía ${cancelled.join(", ")} de GF Courier quedó anulada.` };
+}
+
+/**
  * Lo que sigue a cada resultado (E23):
  * - confirma, plan `ahora` → se programa (se reescribe el programa);
  * - confirma, `al_recibir` → se quita el programa si es de otro día;
@@ -808,22 +875,28 @@ async function afterCall(admin: Admin, input: {
       if (courier === "gf_courier") {
         return await gfGuideForAgreement(admin, { facts: f, day, actor, decidedAt: c.decided_at, tail, programChanged: cleared });
       }
+      // La guía GF viva sin motorizado se anula al guardar (owner, 24-11-2026, #KP207918).
+      const gf = await releaseGfForAgreement(admin, { facts: f, caseRow: c, day, courierName, actor });
+      const gfTail = `${gf.note}${tail}`;
+      const gfError = gf.error ? { error: gf.error } : {};
       // Con la salida de ese courier ya viva no hay nada que crear (13-11-2026).
       if (f.box.kind === "con_courier" && sameCourier(f.box.courier, courier)) {
-        return { notice: `Acuerdo guardado: la salida de ${courierName} ya existe.${tail}`, programChanged: cleared };
+        return { notice: `Acuerdo guardado: la salida de ${courierName} ya existe.${gfTail}`, ...gfError, programChanged: cleared };
       }
       // Con «Guía Aliclik y Swayp del día programado» en Activo (0349), la guía la crea Kapta.
       if ((courier === "aliclik" || courier === "fenix") && f.storeId) {
         const auto = await loadLimaCourierAutoActiveStores(admin, [f.storeId]).catch(() => [] as string[]);
         if (auto.includes(f.storeId)) {
           return {
-            notice: `Acuerdo guardado: sale el ${programDayLabel(day)} con ${courierName}. Kapta crea su guía ${courier === "aliclik" ? "la noche anterior o la mañana de ese día" : "la víspera"}; si no puede, avisa por Telegram.${tail}`,
+            notice: `Acuerdo guardado: sale el ${programDayLabel(day)} con ${courierName}${gf.error ? "" : " (en «Programados»)"}. Kapta crea su guía ${courier === "aliclik" ? "la noche anterior o la mañana de ese día" : "la víspera"}; si no puede, avisa por Telegram.${gfTail}`,
+            ...gfError,
             programChanged: cleared,
           };
         }
       }
       return {
-        notice: `Acuerdo guardado: crea la salida de ${courierName} desde la Mesa de ruta del pedido.${tail}`,
+        notice: `Acuerdo guardado: crea la salida de ${courierName} desde la Mesa de ruta del pedido.${gfTail}`,
+        ...gfError,
         href: orderDrawerHref(f.orderId, "operar", { pathname: REPRO_LIMA_PATH }),
         programChanged: cleared,
       };

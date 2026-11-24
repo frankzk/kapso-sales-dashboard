@@ -62,6 +62,7 @@ import {
   defaultReproCourier,
   firstAllowedDay,
   gfAgreementGuideNote,
+  gfOtherCourierNote,
   isBoxAction,
   isProblemState,
   isReproCourier,
@@ -793,7 +794,10 @@ export function ReproLimaPanel({
   const tomorrowProblem = dayProblem(tomorrow);
   const swayp = courier === "fenix";
   // GF Courier con una guía GF viva: qué hace Kapta con ella al guardar.
-  const gfGuideNote = outcome === "confirma" && courier === "gf_courier" && current.gfGuidePlan ? gfAgreementGuideNote(current.gfGuidePlan) : null;
+  // Otro courier con una guía GF viva (owner, 24-11-2026): Kapta la anula al guardar; con motorizado, se dice.
+  const gfGuideNote = outcome === "confirma" && courier && current.gfGuidePlan
+    ? courier === "gf_courier" ? gfAgreementGuideNote(current.gfGuidePlan) : gfOtherCourierNote(current.gfGuidePlan, reproCourierName(courier))
+    : null;
   // Aliclik no crea la guía sin coordenada: la misma regla que el servidor (§6.2).
   const needsCoordinate = outcome === "confirma" && reproNeedsCoordinate(courier, current.hasCoordinate);
   const coordinateCheck = needsCoordinate ? dispatchCoordinateInput(coordinate) : null;

@@ -190,6 +190,35 @@ export function gfGuideAssignedMessage(guideCode: string | null | undefined): st
   return `GF Courier ya asignó la guía ${guideCode?.trim() || "viva"} a un motorizado (en ruta): no se crea otra. Sale con esa si GF la reprograma; si GF la devuelve o la anula, se crea la siguiente.`;
 }
 
+/**
+ * Otro courier en el acuerdo con una guía GF viva (owner, 24-11-2026, #KP207918 y #KP200821: «cuando generamos la
+ * reprogramación para dentro de unos días, no anula la guía de GF Courier ni lo pasó a Programados»): quien guarda el
+ * acuerdo decide el courier, así que Kapta anula la guía GF sin motorizado al guardar. Lo que dice la hoja. Null sin
+ * guía GF viva. PURA.
+ */
+export function gfOtherCourierNote(plan: GfAgreementGuidePlan, courierName: string): string | null {
+  switch (plan.kind) {
+    case "crear":
+      return null;
+    case "asignada":
+      return `GF Courier ya asignó la guía ${plan.guideCode?.trim() || "viva"} a un motorizado: Kapta no la anula. Pide a GF que la devuelva antes de que salga con ${courierName}.`;
+    case "lista":
+      return `Al guardar, Kapta anula la guía ${plan.guideCode?.trim() || "de GF Courier"} (GF todavía no la asigna a un motorizado): sale con ${courierName}.`;
+    case "reemplazar": {
+      const codes = plan.cancel.map((c) => c.guideCode?.trim() || "sin número").join(", ");
+      return `Al guardar, Kapta anula la guía ${codes} (GF todavía no la asigna a un motorizado): sale con ${courierName}.`;
+    }
+  }
+}
+
+/** El motivo y la nota con que Kapta anula la guía GF cuando el acuerdo es con otro courier. */
+export function reproGfOtherCourierReason(courierName: string): string {
+  return `Nuevo acuerdo en Repro Lima: sale con ${courierName}`;
+}
+export function reproGfOtherCourierNote(courierName: string, day: string): string {
+  return `Guía de GF Courier anulada por Kapta: la clienta acordó salir con ${courierName} el ${programDayLabel(day)} en Repro Lima.`;
+}
+
 /** El motivo del hecho `guide_registered` de la guía que crea Repro Lima. */
 export function reproGfGuideReason(day: string): string {
   return `Repro Lima: acuerdo con la clienta para el ${programDayLabel(day)}`;
