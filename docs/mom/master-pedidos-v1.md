@@ -20864,6 +20864,20 @@ panel suelto y su entrada «GF Courier» en el índice de la ficha se retiraron.
 - **Con motorizado no se anula desde Kapta.** Antes de pedir la anulación, `cancelGfGuideFor` lee la guía en GF: si
   está asignada a un motorizado (etapa `AWAITING_OFFICE_CHECK` o `AWAITING_RIDER`) o ya salió (`OUT_FOR_DELIVERY`,
   `INCIDENT`, `REFUSED`, `RETURNING`), no la anula y dice por qué (`gfCancelBlockedByRider`).
+- **La caja que volvió al almacén de GF sí se anula (owner, 24-11-2026, #KP206846, #KP206937, #KP206970: «no me deja
+  anular la guía de GF para registrarlo con Aliclik»).** Las tres salieron el 17-11 con Alexis, no contestaron y
+  volvieron al almacén de GF, que las dejó guardadas («sale cuando la tienda pida una nueva fecha, o se desarma si la
+  anula»). GF seguía informando `INCIDENT` (el estado no cambia hasta que vuelva a salir), y Kapta lo leía como «ya
+  salió con un motorizado»: ni «Anular en GF Courier», ni crear la guía de Aliclik o Swayp, pasaban. Ahora GF dice en
+  la etapa `BACK_IN_WAREHOUSE` («De vuelta en el almacén de GF») que la caja está en su almacén y en ninguna carga, y
+  con esa etapa Kapta la anula: GF la desarma, el producto vuelve al estante y la guía queda anulada en el acto (GF
+  074). Con la caja todavía en la calle o ya en una carga nueva, sigue sin anularse desde Kapta.
+- **Otro courier con una guía GF que ya no es salida activa (owner, 24-11-2026).** La guía GF con «no contesta», o sin
+  reporte pasado el día de su ruta (§4), no frena a Aliclik ni a Swayp. Al crear una persona la guía del otro courier,
+  Kapta igual intenta anularla en GF (`cancelInactiveGfGuides`): en Aliclik después de crear su guía (`gfToTry` de
+  `aliclikOutputPolicy`), en Swayp antes, como la activa. Si GF no la anula (la caja sigue con el motorizado), la otra
+  guía se crea igual y el aviso dice que la de GF sigue abierta, para anularla en «Salidas y guías» cuando vuelva. La
+  guía GF **activa** sigue como antes: se anula o no se crea la otra.
 - La guía viva se nombra también si la tienda apagó la API o si el pedido no es de Lima.
 - **Sin tope de salidas** (owner, 15-11-2026: «una guía por día, despachada por día»): cerrada la anterior (entregada,
   anulada o devuelta), se crea la siguiente (`-S2`, `-S3`…). Las cinco salidas de §4 no la frenan

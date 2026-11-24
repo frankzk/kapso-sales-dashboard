@@ -77,6 +77,13 @@ export function aliclikOutputPolicy(input: {
     };
   }
   const gfToCancel = liveGf;
+  // La guía GF que ya no está activa pero sigue abierta en GF (owner, 24-11-2026, #KP206970: volvió por «no contestó»
+  // y quedó guardada en su almacén) no frena a Aliclik; Kapta intenta anularla DESPUÉS de crear la de Aliclik, para que
+  // GF desarme la caja y no quede una guía fantasma. Si GF no puede (la caja sigue con el motorizado), queda abierta.
+  const gfToTry = input.person
+    ? live.filter((output) => isGfCourier(output.courier) && !liveGf.includes(output) && !output.returned_at &&
+      ["pendiente", "en_ruta"].includes(output.delivery_status) && Boolean(output.guide_code))
+    : [];
   const candidates = live.filter((output) => !gfToCancel.includes(output));
   // El motivo no permite duplicar Aliclik ni emitir sobre una entrega ya hecha.
   const blocking = candidates.find((output) =>
@@ -107,12 +114,20 @@ export function aliclikOutputPolicy(input: {
     // reintento de Lima, con su propio motivo (`aliclikMotiveAllowed`).
     motivo: input.manual ? input.motivo : null,
   });
-  return gate.ok && gfToCancel.length > 0 ? { ...gate, gfToCancel } : gate;
+  if (!gate.ok) return gate;
+  return {
+    ...gate,
+    ...(gfToCancel.length > 0 ? { gfToCancel } : {}),
+    ...(gfToTry.length > 0 ? { gfToTry } : {}),
+  };
 }
 
-/** La puerta de salidas, más las guías GF que Kapta anula antes de crear la de Aliclik. */
+/**
+ * La puerta de salidas, más las guías GF que Kapta anula antes de crear la de Aliclik (`gfToCancel`: si GF no la anula,
+ * no se crea) y las que intenta anular después, sin frenar (`gfToTry`: ya no están activas).
+ */
 export type AliclikOutputPolicyResult =
-  | (Extract<PuertaDeSalidaAdicional, { ok: true }> & { gfToCancel?: AliclikExistingOutput[] })
+  | (Extract<PuertaDeSalidaAdicional, { ok: true }> & { gfToCancel?: AliclikExistingOutput[]; gfToTry?: AliclikExistingOutput[] })
   | Extract<PuertaDeSalidaAdicional, { ok: false }>;
 
 function isGfCourier(courier: string): boolean {

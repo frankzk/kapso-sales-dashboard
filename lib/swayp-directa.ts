@@ -280,7 +280,8 @@ export async function emitirGuiaSwaypDirecta(
     const { cancelLiveGfForOtherCourier } = await import("@/lib/gf-courier-guide");
     const gf = await cancelLiveGfForOtherCourier(admin, order.id, gfToCancel, { userId: input.actorId, courier: "Swayp" });
     if (!gf.ok) return { error: gf.error };
-    gfNote = ` La guía de GF Courier ${gf.cancelled.join(", ")} quedó anulada.`;
+    gfNote = (gf.cancelled.length ? ` La guía de GF Courier ${gf.cancelled.join(", ")} quedó anulada.` : "") +
+      (gf.notice ? ` ${gf.notice}` : "");
   }
   if (!input.guideCode?.trim()) {
     const viaApi = await createFenixGuideViaApi({

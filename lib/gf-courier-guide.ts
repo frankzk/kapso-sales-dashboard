@@ -14,6 +14,7 @@ import "server-only";
 //   5. Un timeout NO es un fallo: la intención queda 'pending' y el reintento usa la MISMA Idempotency-Key, así que
 //      GF devuelve la misma guía. DUPLICATE_ORDER / IDEMPOTENCY_CONFLICT con tracking_id se ADOPTAN (la guía existe).
 import { otherCourierBlocksGf } from "@/lib/gf-other-courier";
+import { salidaActiva, type SalidaExistente } from "@/lib/shipment-output";
 import { SALIDA_ACTIVA_COLUMNS, withLastCourierChange } from "@/lib/salida-activa-server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase } from "@/lib/db";
@@ -300,9 +301,13 @@ export async function cancelLiveGfForOtherCourier(
   admin: SupabaseClient, orderId: string,
   outputs: readonly { courier: string | null; delivery_status: string; guide_code: string | null }[],
   ctx: { userId: string; courier: string },
-): Promise<{ ok: true; cancelled: string[] } | { ok: false; error: string }> {
+): Promise<{ ok: true; cancelled: string[]; notice: string | null } | { ok: false; error: string }> {
   const cancelled: string[] = [];
+  const inactive: (typeof outputs)[number][] = [];
   for (const gf of liveGfGuides(outputs)) {
+    // La guía GF que ya no es una salida activa (§4, owner 23-11-2026: «no contesta», o sin reporte pasado el día de su
+    // ruta) no frena al otro courier (owner, 24-11-2026, #KP206970): se intenta anular, sin frenar (abajo).
+    if (!salidaActiva(gf as unknown as SalidaExistente)) { inactive.push(gf); continue; }
     const res = await cancelGfGuideFor(orderId, gf.guide_code!, {
       userId: ctx.userId, reason: `Pasa a ${ctx.courier}`, note: `Guía de GF Courier anulada por Kapta al crear la guía de ${ctx.courier}.`,
     }, admin);
@@ -310,5 +315,36 @@ export async function cancelLiveGfForOtherCourier(
     if (res.requested) return { ok: false, error: `GF todavía no confirma la anulación de ${gf.guide_code}. No se creó la guía de ${ctx.courier}.` };
     cancelled.push(gf.guide_code!);
   }
-  return { ok: true, cancelled };
+  const tried = await cancelInactiveGfGuides(admin, orderId, inactive, ctx.userId, ctx.courier);
+  return { ok: true, cancelled: [...cancelled, ...tried.cancelled], notice: tried.leftOpenNotice };
+}
+
+/**
+ * Guías GF que ya no son una salida activa pero siguen abiertas en GF (owner, 24-11-2026, #KP206846, #KP206937,
+ * #KP206970: volvieron por «no contestó» y quedaron guardadas en el almacén de GF). Al sacar el pedido por otro courier,
+ * Kapta las anula en GF para que desarme la caja y devuelva el producto al estante. Nunca frena: si GF no la anula (la
+ * caja sigue con el motorizado), queda abierta y se dice para anularla cuando vuelva.
+ */
+export async function cancelInactiveGfGuides(
+  admin: SupabaseClient, orderId: string,
+  guides: readonly { guide_code?: string | null }[],
+  userId: string | null, courier: string,
+): Promise<{ cancelled: string[]; leftOpen: string[]; notice: string | null; leftOpenNotice: string | null }> {
+  const cancelled: string[] = [], leftOpen: string[] = [];
+  for (const gf of guides) {
+    if (!gf.guide_code) continue;
+    try {
+      const res = await cancelGfGuideFor(orderId, gf.guide_code, {
+        userId, reason: `Pasa a ${courier}`, note: `Guía de GF Courier anulada por Kapta al crear la guía de ${courier}.`,
+      }, admin);
+      (res.ok && !res.requested ? cancelled : leftOpen).push(gf.guide_code);
+    } catch {
+      leftOpen.push(gf.guide_code);
+    }
+  }
+  const leftOpenNotice = leftOpen.length
+    ? `La guía de GF Courier ${leftOpen.join(", ")} sigue abierta en GF (la caja no ha vuelto a su almacén): anúlala en «Salidas y guías» cuando vuelva.`
+    : null;
+  const parts = [cancelled.length ? `La guía de GF Courier ${cancelled.join(", ")} quedó anulada.` : null, leftOpenNotice].filter(Boolean);
+  return { cancelled, leftOpen, notice: parts.length ? parts.join(" ") : null, leftOpenNotice };
 }
