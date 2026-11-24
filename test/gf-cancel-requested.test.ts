@@ -73,6 +73,13 @@ describe("con motorizado no se anula desde Kapta (owner 17-11-2026)", () => {
     expect(gfCancelBlockedByRider(order("READY_FOR_PICKUP", "AWAITING_ASSIGNMENT"))).toBeNull();
     expect(gfCancelBlockedByRider(order("CREATED", "TO_PREPARE"))).toBeNull();
   });
+  it("novedad con la caja de vuelta en el almacén de GF: se anula (owner 24-11-2026, #KP206970)", () => {
+    expect(gfCancelBlockedByRider(order("INCIDENT", "BACK_IN_WAREHOUSE"))).toBeNull();
+    // Sin la etapa (GF anterior, o la caja sigue con el motorizado), como antes.
+    expect(gfCancelBlockedByRider(order("INCIDENT"))).toContain("ya salió");
+    expect(gfCancelBlockedByRider(order("INCIDENT", "AWAITING_RIDER"))).toContain("Alexis");
+    expect(gfCancelBlockedByRider(order("OUT_FOR_DELIVERY", "BACK_IN_WAREHOUSE"))).toContain("ya salió");
+  });
 });
 
 describe("Swayp anula la guía GF viva al crearse (owner 17-11-2026, #KP206994)", () => {

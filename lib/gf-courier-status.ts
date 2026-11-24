@@ -67,14 +67,22 @@ export function gfReportedStatus(code: string, subStatus: string | null): string
   return subStatus ? `${code}:${subStatus}` : code;
 }
 
+/**
+ * Etapa de GF para la caja con novedad que ya volvió a su almacén (GF, owner 24-11-2026, #KP206970): el estado sigue
+ * INCIDENT, pero ningún motorizado la tiene y GF la anula (la desarma y devuelve el producto al estante).
+ */
+export const GF_STAGE_BACK_IN_WAREHOUSE = "BACK_IN_WAREHOUSE";
+
 /** ¿La guía ya tiene motorizado en GF? Devuelve el motivo para no anularla desde Kapta, o null. */
 export function gfCancelBlockedByRider(order: Pick<GfOrder, "status" | "stage">): string | null {
   const code = order.status?.code ?? "";
-  if (["OUT_FOR_DELIVERY", "INCIDENT", "REFUSED", "RETURNING"].includes(code))
-    return "La guía ya salió con un motorizado: no se anula desde Kapta. Coordina el retorno con GF Courier.";
   const stage = order.stage?.code ?? "";
   if (stage === "AWAITING_OFFICE_CHECK" || stage === "AWAITING_RIDER")
     return `La guía ya está asignada a ${order.stage?.rider_name ?? "un motorizado"} en GF: no se anula desde Kapta. Pide a GF que la retire de la carga.`;
+  // Volvió por «no contestó» y está en el almacén de GF (owner, 24-11-2026, #KP206846, #KP206937, #KP206970): se anula.
+  if (code === "INCIDENT" && stage === GF_STAGE_BACK_IN_WAREHOUSE) return null;
+  if (["OUT_FOR_DELIVERY", "INCIDENT", "REFUSED", "RETURNING"].includes(code))
+    return "La guía ya salió con un motorizado: no se anula desde Kapta. Coordina el retorno con GF Courier.";
   return null;
 }
 

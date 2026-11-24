@@ -40,7 +40,7 @@ import { legacySaleSendBlock } from "@/lib/legacy-sale-cancel-access";
 import { prepayOrderCheck, type PrepayOrderRow } from "@/lib/prepay-list-server";
 import { LEGACY_SALE_CANCEL_REASON } from "@/lib/legacy-sale-cancel";
 import { env } from "@/lib/env";
-import { cancelGfGuideFor } from "@/lib/gf-courier-guide";
+import { cancelGfGuideFor, cancelInactiveGfGuides } from "@/lib/gf-courier-guide";
 import { dispatchFallsOnSunday, expectedDispatchDate } from "@/lib/aliclik-dispatch-date";
 import { getStoreCreds } from "@/lib/ingest";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
@@ -1605,6 +1605,11 @@ export async function createAliclikGuideFor(
   if (gfReplaced?.error) console.warn(`[aliclik-guide] ${ctx.row.order_name ?? orderId}: la caja de Grupo GF no quedó en devolución: ${gfReplaced.error}`);
   const gfNotice = replacedByGuideNotice(gfReplaced?.replaced ?? []);
 
+  // La guía GF que ya no estaba activa pero seguía abierta en GF (owner, 24-11-2026, #KP206970): con la de Aliclik ya
+  // creada, Kapta la anula en GF para que desarme la caja. Si GF no puede (sigue con el motorizado), queda abierta y
+  // se dice; la guía de Aliclik ya existe y no se toca.
+  const gfTried = await cancelInactiveGfGuides(admin, orderId, finalOutputPolicy.gfToTry ?? [], ctx.userId, "Aliclik");
+
   await recomputeOrderMasterSafe(admin, [orderId]);
   return {
     orderNumber,
@@ -1613,6 +1618,7 @@ export async function createAliclikGuideFor(
       `cobrar S/ ${(preview.collectTotal ?? 0).toFixed(2)} · ` +
       `${courierBlock.transportName ?? "courier"} S/ ${courierBlock.deliveryCost}.` +
       (confirmsHere ? " El pedido queda confirmado." : "") +
-      (gfNotice ? ` ${gfNotice}` : ""),
+      (gfNotice ? ` ${gfNotice}` : "") +
+      (gfTried.notice ? ` ${gfTried.notice}` : ""),
   };
 }

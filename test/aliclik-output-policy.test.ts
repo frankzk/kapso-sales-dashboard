@@ -147,4 +147,36 @@ describe("GF Courier → Aliclik: Kapta anula la guía GF (owner, 15-11-2026)", 
     expect(src).toContain("person: Boolean(ctx.userId) && !origin");
     expect(src).toContain("${res.error}${gfNote}");
   });
+
+  // #KP206846, #KP206937, #KP206970 (owner, 24-11-2026): la guía GF volvió por «no contesta» y quedó guardada en el
+  // almacén de GF. Ya no es una salida activa: no frena a Aliclik, y Kapta la anula en GF después de crear la de
+  // Aliclik, sin frenar si GF no puede.
+  const noContesta: AliclikExistingOutput = {
+    id: "gf-no-contesta", courier: "gf_courier", guide_code: "KENKU-KP206937", output_code: "KP206937-S01",
+    delivery_status: "pendiente", created_via: "gf_courier_api", custody_state: "courier",
+    custody_transferred_at: "2026-11-17T22:37:26.117+00:00", dispatched_at: "2026-11-17T22:37:26.117+00:00",
+    reported_status: "INCIDENT:NO_ANSWER", last_courier_change_at: "2026-11-18T16:48:55.166+00:00",
+  } as AliclikExistingOutput;
+
+  it("GF con «no contesta»: una persona crea Aliclik sin motivo y la GF se intenta anular después", () => {
+    const result = byPerson([noContesta]);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.gfToCancel).toBeUndefined();
+      expect(result.gfToTry?.map((o) => o.guide_code)).toEqual(["KENKU-KP206937"]);
+      expect(result.motivo).toBeNull();
+    }
+    const auto = aliclikOutputPolicy({ outputs: [noContesta], operation: "lima", motivo: null, manual: false });
+    expect(auto.ok && auto.gfToTry).toBeFalsy();
+  });
+
+  it("la GF que no frena se anula con la guía de Aliclik ya creada, y nunca la deshace", () => {
+    const src = readFileSync(join(process.cwd(), "lib/aliclik-guide.ts"), "utf8");
+    const tried = src.indexOf("cancelInactiveGfGuides(admin, orderId, finalOutputPolicy.gfToTry");
+    expect(tried).toBeGreaterThan(src.indexOf('if ("error" in written)'));
+    expect(tried).toBeLessThan(src.indexOf("await recomputeOrderMasterSafe(admin, [orderId]);\n  return {\n    orderNumber,"));
+    const helper = readFileSync(join(process.cwd(), "lib/gf-courier-guide.ts"), "utf8");
+    expect(helper).toContain("sigue abierta en GF (la caja no ha vuelto a su almacén)");
+    expect(helper).toContain("if (!salidaActiva(gf as unknown as SalidaExistente)) { inactive.push(gf); continue; }");
+  });
 });
