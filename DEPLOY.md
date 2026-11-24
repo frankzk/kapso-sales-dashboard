@@ -85,6 +85,17 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 24-11-2026 · Repro Lima: «Guardar y pasar al siguiente» se queda en el siguiente (sin migración, MOM §9.5)
+
+Sin migración ni variables. A veces, al guardar, la ficha volvía al mismo pedido y el equipo registraba otra vez el
+mismo «No contesta» (#AUR900995, #KP201989, #KP202284). Ahora usa el siguiente que se veía al pulsar, no recarga la
+página entera al pasar (una carga de 3–5 s menos por guardado) y, si la URL vuelve al pedido guardado, reabre el
+siguiente. Los logs de Vercel lo cuentan: «[Kapso performance]» con `repro:next`, `repro:next-missing` y
+`repro:next-reverted`.
+
+Verificar: en Repro Lima, «Atender» → «No contesta» → «Guardar y pasar al siguiente» abre el siguiente de la lista; en
+los logs aparece `repro:next` y no `repro:next-missing`.
+
 ### 24-11-2026 · Repro Lima: acordar con otro courier anula la guía GF (sin migración, MOM §9.5 y §29.17)
 
 Sin migración ni variables. Al guardar «Confirma fecha» con Aliclik, Swayp u otro courier que no es GF Courier, Kapta

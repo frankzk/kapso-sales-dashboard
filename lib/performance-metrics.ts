@@ -4,6 +4,11 @@ export const CLIENT_PERFORMANCE_METRIC_NAMES = [
   "kapso:call-save",
   "kapso:whatsapp-chat-first-paint",
   "kapso:whatsapp-send",
+  // «Guardar y pasar al siguiente» de Repro Lima (owner, 24-11-2026): pasó, no
+  // había siguiente, o la URL volvió al pedido guardado y se reabrió el siguiente.
+  "repro:next",
+  "repro:next-missing",
+  "repro:next-reverted",
 ] as const;
 
 export type ClientPerformanceMetricName = (typeof CLIENT_PERFORMANCE_METRIC_NAMES)[number];

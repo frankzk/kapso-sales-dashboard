@@ -77,7 +77,8 @@ import {
   reproLimaQueueVersion,
   subscribeReproLimaQueue,
 } from "@/lib/repro-lima-queue";
-import { orderDrawerHref } from "@/lib/order-drawer-href";
+import { DRAWER_PARAM, orderDrawerHref } from "@/lib/order-drawer-href";
+import { reportClientPerformanceMetric } from "@/lib/client-performance";
 import { AliclikDuplicatePanel } from "@/components/aliclik-duplicate-panel";
 import { CopyButton, copyLabel, useCopyToClipboard } from "@/components/copy-button";
 import { GuideNumber } from "@/components/guide-number";
@@ -782,6 +783,10 @@ function DrawerNextActionCard({
   );
 }
 
+
+/** Cuánto se espera para comprobar que «Guardar y pasar al siguiente» se quedó en el siguiente. */
+const REPRO_NEXT_CHECK_MS = 1500;
+
 export function OrderDrawer({
   orderId,
   canEdit,
@@ -1155,31 +1160,58 @@ export function OrderDrawer({
     requestCloseRef.current = requestClose;
   });
   const reproQueueVersion = useSyncExternalStore(subscribeReproLimaQueue, reproLimaQueueVersion, () => 0);
-  const reproHasNext = useMemo(
-    () => Boolean(reproRow && reproLimaNext(orderId)),
+  const reproNext = useMemo(
+    () => (reproRow ? reproLimaNext(orderId) : null),
     // `reproQueueVersion` cambia cuando el tablero publica su lista.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [orderId, reproRow, reproQueueVersion],
   );
+  const reproHasNext = Boolean(reproNext);
+  // El siguiente que veía quien pulsó «Guardar y pasar al siguiente»: si al
+  // terminar de guardar la lista ya no da uno, se usa este (owner, 24-11-2026,
+  // Akemi: «cuando marco el estado y le doy a pasar al siguiente me devuelve
+  // al mismo»; el mismo «No contesta» quedaba dos y tres veces).
+  const reproNextRef = useRef<string | null>(null);
+  useEffect(() => {
+    reproNextRef.current = reproNext;
+  }, [reproNext]);
+
+  /**
+   * Abre el siguiente en la misma pestaña. Si algo devuelve la URL al pedido
+   * que se acaba de guardar (un refresco que termina después), se vuelve a
+   * abrir el siguiente una vez y queda en los logs (`repro:next-reverted`).
+   */
+  function goToNextRepro(savedId: string, next: string) {
+    const href = orderDrawerHref(next, "reprolima", { pathname: window.location.pathname, search: window.location.search });
+    window.history.pushState(null, "", href);
+    reportClientPerformanceMetric("repro:next", 0);
+    window.setTimeout(() => {
+      if (new URLSearchParams(window.location.search).get(DRAWER_PARAM) !== savedId) return;
+      reportClientPerformanceMetric("repro:next-reverted", 0);
+      window.history.pushState(null, "", href);
+    }, REPRO_NEXT_CHECK_MS);
+  }
 
   function onReproSaved(saved: ReproSaved, advance: boolean) {
-    void reload();
-    onSaved();
     const text = saved.error ?? saved.notice ?? "Guardado.";
     // Lo que pide algo (un error, como «no se pudo programar», o crear la
     // salida en la Mesa de ruta) no pasa al siguiente: el aviso queda arriba de
     // esta pestaña. Lo demás («Avisa a Almacén…») pasa al siguiente de la lista
     // del tablero, en la misma pestaña, y va arriba de la suya.
-    const next = advance && !saved.error && !saved.mesa ? reproLimaNext(saved.orderId) : null;
+    const wantsNext = advance && !saved.error && !saved.mesa;
+    const next = wantsNext ? reproLimaNext(saved.orderId) ?? reproNextRef.current : null;
     if (next && next !== orderId) {
       handOffReproLima(next, { orderName: saved.orderName, text });
-      window.history.pushState(
-        null,
-        "",
-        orderDrawerHref(next, "reprolima", { pathname: window.location.pathname, search: window.location.search }),
-      );
+      // Sin `router.refresh()` aquí: guardar ya refrescó Repro Lima
+      // (`revalidatePath`) y la ficha del siguiente lo refresca al tomar su
+      // caso. Era una carga entera más (3–5 s) por guardado, a la vez que el
+      // cambio de URL.
+      goToNextRepro(saved.orderId, next);
       return;
     }
+    if (wantsNext) reportClientPerformanceMetric("repro:next-missing", 0);
+    void reload();
+    onSaved();
     setReproSession((current) => ({
       orderId,
       key: current.key + 1,

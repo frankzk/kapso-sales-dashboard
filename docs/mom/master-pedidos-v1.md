@@ -6519,6 +6519,13 @@ tiene que estar en el anaquel antes de las 12:30.») queda arriba de la pestaña
 siguiente, con el nombre de ese pedido. Abierta fuera del tablero (Master de
 Pedidos) no hay lista: el botón dice «Guardar» y el aviso queda arriba, igual.
 Desde la lectura, «Atender» (o «Cambiar el acuerdo») vuelve a tomar el caso.
+Pasar se queda en el siguiente (owner, 24-11-2026, Akemi: «cuando marco el
+estado y le doy a pasar al siguiente me devuelve al mismo»; el mismo «No
+contesta» quedaba dos y tres veces): se usa el siguiente que se veía al
+pulsar si la lista ya no da uno, al pasar no se recarga la página entera
+(guardar ya la refrescó) y, si la URL vuelve al pedido guardado, se reabre el
+siguiente una vez. Los logs lo cuentan: `repro:next`, `repro:next-missing`,
+`repro:next-reverted`.
 
 **Fechas.**
 
