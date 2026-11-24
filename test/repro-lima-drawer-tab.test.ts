@@ -136,7 +136,8 @@ describe("el tablero abre la ficha en la pestaña", () => {
     const publish = between(board, "useEffect(() => {\n    if (retriesOnly) return;", "}, [inQueue, caseById, retriesOnly]);");
     expect(publish).toContain("next: (orderId) => nextAfter(orderId)?.orderId ?? null");
     expect(publish).toContain("return () => clearReproLimaQueue(queue);");
-    expect(drawer).toContain("const reproHasNext = useMemo(");
+    expect(drawer).toContain("const reproNext = useMemo(");
+    expect(drawer).toContain("const reproHasNext = Boolean(reproNext);");
     expect(drawer).toContain("hasNext={reproHasNext}");
   });
 });

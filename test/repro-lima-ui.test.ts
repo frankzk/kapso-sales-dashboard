@@ -490,12 +490,13 @@ describe("el tablero (E31, E33)", () => {
   it("«Guardar y pasar al siguiente» no tapa un error ni un aviso con la pestaña siguiente", () => {
     const onSaved = between(drawer, "function onReproSaved(saved: ReproSaved, advance: boolean) {", "\n  }\n");
     // Un error o la Mesa de ruta: no pasa; el aviso queda arriba de esta pestaña.
-    expect(onSaved).toContain("const next = advance && !saved.error && !saved.mesa ? reproLimaNext(saved.orderId) : null;");
+    expect(onSaved).toContain("const wantsNext = advance && !saved.error && !saved.mesa;");
+    expect(onSaved).toContain("const next = wantsNext ? reproLimaNext(saved.orderId) ?? reproNextRef.current : null;");
     expect(onSaved).toContain('mode: "read",');
     expect(onSaved).toContain('tone: saved.error ? "crit" : "ok",');
     // Lo demás («Avisa a Almacén…») va arriba de la pestaña del siguiente, en la misma pestaña.
     expect(onSaved).toContain("handOffReproLima(next, { orderName: saved.orderName, text });");
-    expect(onSaved).toContain('orderDrawerHref(next, "reprolima", { pathname: window.location.pathname, search: window.location.search })');
+    expect(drawer).toContain('orderDrawerHref(next, "reprolima", { pathname: window.location.pathname, search: window.location.search })');
     expect(drawer).toContain("previous={reproSession.notice}");
     expect(panel).toContain('<Banner tone={previous.tone ?? "ok"} role={previous.tone === "crit" ? "alert" : "status"} title={previous.orderName}>');
     // Arriba de todo: antes del candado.
