@@ -21227,6 +21227,15 @@ en el historial «GF Courier: asignado a Alexis para la ruta del 18/11». Si la 
 `changeGfGuideDateFor`): misma guía, caja armada, sin anular ni rearmar. Si GF responde que ya está asignada, se dice
 y no se crea otra; si no puede por otra causa (reprogramación abierta), sigue el camino de anular y crear.
 
+**La caja guardada en GF se arma de nuevo cuando la fecha la pide Kapta (owner, 25-11-2026, #KP207634, #KP207294 y
+#AUR901232: «los que vienen de Repro Lima y el origen es Kapta deberían ir a Por preparar» → «se desarma y se arma de
+nuevo»).** Si la caja ya volvió de una visita fallida y quedó guardada en el almacén de GF, al pedirle Kapta la nueva
+fecha GF la da por desarmada y ese día el pedido entra a **Por preparar** en GF, como uno más (misma guía de GF, caja
+y rótulo nuevos). GF lo dice en la respuesta (`box: REARM`) y Kapta lo escribe tal cual en la Actividad y en el aviso
+de Repro Lima: «…ahora sale ese día: GF desarma la caja guardada y ese día la arma de nuevo (Por preparar)», en vez de
+«con la misma guía y la caja armada» (`gfDateBoxText`). Los que oficina reprograma desde el Cierre del motorizado de GF
+para el mismo día van directo a **Por asignar** con la misma guía; eso es de GF y Kapta solo recibe el cambio de fecha.
+
 **El día del acuerdo de Repro Lima manda (owner, 16-11-2026: «ella lo quiere para el 18»).** Al guardar un acuerdo
 con GF Courier, Kapta quita la salida programada de Grupo GF y crea la guía para el día acordado. Si esa creación
 falla (por ejemplo, por un dato que GF rechazaba), la guía que se cree después —el botón de la Mesa de ruta o la

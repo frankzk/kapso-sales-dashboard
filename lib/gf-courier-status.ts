@@ -94,6 +94,17 @@ export function gfCancelBlockedByRider(order: Pick<GfOrder, "status" | "stage">)
   return null;
 }
 
+/**
+ * Qué pasa con la caja al cambiarle el día a una guía GF, según lo que GF responde (`box`; owner, 25-11-2026: los pedidos
+ * reprogramados desde Repro Lima con la caja guardada en GF «deberían ir a Por preparar» → «se desarma y se arma de nuevo»).
+ * Sin el dato (GF anterior) o con SAME_LABEL, lo de siempre: misma guía y caja armada.
+ */
+export function gfDateBoxText(box: GfOrder["box"] | null | undefined): string {
+  if (box === "REARM") return "GF desarma la caja guardada y ese día la arma de nuevo (Por preparar)";
+  if (box === "NEW_LABEL") return "la caja sigue armada y GF la rotula de nuevo ese día";
+  return "con la misma guía y la caja armada";
+}
+
 /** Guías de GF Courier vivas (pendiente o en ruta) con número. */
 export function liveGfGuides<T extends { courier: string | null; delivery_status: string; guide_code: string | null }>(outputs: readonly T[]): T[] {
   return outputs.filter((o) => (o.courier ?? "").trim().toLowerCase().replace(" ", "_") === "gf_courier"
