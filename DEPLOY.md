@@ -85,6 +85,35 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 25-11-2026 · Los sellos del cierre de Aliclik no cuentan como cambio de la guía (0355, MOM §19.2)
+
+**Migración 0355** (`db/migrations/0355_aliclik_followup_no_touch.sql`): solo cambia la función del trigger de
+`shipments.updated_at` (la de la 0204 y la 0321) para que `aliclik_followup_at` y `reason_probed_at` no lo muevan.
+Sin columnas, índices ni datos nuevos. Se puede desplegar el código **antes o después** de aplicarla: ningún código
+depende de ella. Correrla otra vez no cambia nada. **No se aplica sola**:
+
+```bash
+psql "$DATABASE_URL" -f db/migrations/0355_aliclik_followup_no_touch.sql
+```
+
+Toma un bloqueo corto sobre `shipments` (el `create or replace` de la función): mejor fuera de horario.
+
+El caso, medido el 25-11-2026: el cierre de Aliclik (minutos 10, 30 y 50) anota en cada guía que persigue que ya le
+preguntó. La base contaba esa anotación como un cambio de la guía: el pedido quedaba desfasado, el Master lo
+recalculaba y cada pestaña del Master se recargaba. De 1.219 guías de Aliclik tocadas en tres horas, 997 solo habían
+recibido esa anotación.
+
+Verificar después de aplicarla, pasados los minutos 10, 30 o 50 (solo lee):
+
+```sql
+select count(*) as tocadas,
+       count(*) filter (where abs(extract(epoch from (updated_at - aliclik_followup_at))) < 3) as solo_por_el_sello
+from shipments
+where courier = 'aliclik' and updated_at > now() - interval '30 minutes';
+```
+
+`solo_por_el_sello` debe quedar en 0 (antes, unas 130 por pasada).
+
 ### 25-11-2026 · Carga del sistema: Repro Lima recarga una vez, Aliclik no reescribe entregadas y se mide cada pantalla (sin migración, MOM §9.5 y §35.10)
 
 Sin migración ni variables. Sale de `docs/plan/rendimiento-carga.md` (fase 0 y tres cambios de la fase 1) y de dos
