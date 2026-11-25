@@ -27,6 +27,7 @@ import { IconAlert, IconArrowLeft, IconArrowUpRight, IconBot, IconChat, IconChec
 import { cn } from "@/components/ui";
 import { chatbyDayLabel, chatbyLimaDay, chatbyLimaTime } from "@/lib/chatby-conversation";
 import { dmReplyMode, privateReplyAllowed, socialKindLabel, socialPlatformLabel } from "@/lib/social-inbox";
+import { isMetaSystemNotice } from "@/lib/social-ai";
 
 export interface SocialThreadView {
   id: string;
@@ -716,6 +717,14 @@ function ModeOption({ label, active, onClick, disabled, title }: { label: string
 }
 
 function MessageBubble({ m }: { m: SocialMessageView }) {
+  if (m.direction === "in" && isMetaSystemNotice(m.text)) {
+    // Un aviso de Meta, no un mensaje de la clienta.
+    return (
+      <li className="px-6 text-center text-xs leading-4 text-ink-500">
+        <span className="font-medium text-ink-600">Aviso de Meta:</span> {m.text!.replace(/\(https?:\/\/\S+\)/g, "").replace(/\s*Ver comentario\s*$/i, "").trim()}
+      </li>
+    );
+  }
   const out = m.direction === "out";
   const who = out
     ? m.via === "kapta" ? (m.sentByName ?? "Kapta") : m.via === "auto" ? "Respuesta automática" : "Desde Meta"

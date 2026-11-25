@@ -14,7 +14,7 @@ import { wooGetPage } from "@/lib/woocommerce";
 import { withWooAuthFallback } from "@/lib/woocommerce-intake";
 import { zernioConfigured } from "@/lib/zernio";
 import { generateSocialAiReply, socialAiConfigured, storeCatalog } from "@/lib/social-ai-server";
-import type { SocialAiReply } from "@/lib/social-ai";
+import { isMetaSystemNotice, isUnreachableError, type SocialAiReply } from "@/lib/social-ai";
 
 export async function loadAutoSettings(admin: SupabaseClient, storeId: string): Promise<SocialAutoSettings | null> {
   const { data } = await admin.from("social_auto_settings").select("enabled,comment_keywords,public_text,private_text,dm_text").eq("store_id", storeId).maybeSingle();
@@ -121,9 +121,16 @@ export async function draftAiReply(admin: SupabaseClient, thread: AutoThread, ph
   const link = whatsappLink(phone, adProduct.title ? `Hola, quiero ${adProduct.title}` : "Hola, vengo de redes y quiero información");
   if (!link) return null;
   const history = ((rows as Array<{ direction: "in" | "out"; text: string | null }> | null) ?? [])
-    .reverse().filter((m) => m.text?.trim()).map((m) => ({ from: m.direction === "in" ? "cliente" as const : "tienda" as const, text: m.text! }));
+    .reverse().filter((m) => m.text?.trim() && !isMetaSystemNotice(m.text)).map((m) => ({ from: m.direction === "in" ? "cliente" as const : "tienda" as const, text: m.text! }));
   if (!history.length || history[history.length - 1]!.from !== "cliente") return "sin_turno";
+  let privateAvailable: boolean | undefined;
+  if (thread.kind === "comment") {
+    const { data: firstIn } = await admin.from("social_messages").select("occurred_at").eq("thread_id", thread.id)
+      .eq("direction", "in").order("occurred_at").limit(1).maybeSingle();
+    privateAvailable = privateReplyAllowed({ kind: "comment", private_reply_at: thread.private_reply_at }, (firstIn as { occurred_at: string } | null)?.occurred_at ?? null);
+  }
   return generateSocialAiReply({
+    privateAvailable,
     storeName: (store as { name: string } | null)?.name ?? "la tienda",
     platform: thread.platform, kind: thread.kind, whatsapp: link, catalog,
     adProduct: adProduct.title ? { name: adProduct.title, price: adProduct.price } : null,
@@ -134,6 +141,27 @@ export async function draftAiReply(admin: SupabaseClient, thread: AutoThread, ph
 /** El hilo con lo que necesita lo automático. */
 export async function loadAutoThread(admin: SupabaseClient, threadId: string): Promise<AutoThread | null> {
   return loadThread(admin, threadId);
+}
+
+/**
+ * ¿Meta ya dijo que no deja escribirle a esta persona? (#551 «no está disponible»,
+ * o la ventana de 24 h cerrada). Entonces la IA no lo vuelve a intentar: lo ve
+ * una asesora.
+ */
+async function metaRefusedBefore(admin: SupabaseClient, threadId: string): Promise<boolean> {
+  const { data } = await admin.from("social_messages").select("error,created_at").eq("thread_id", threadId)
+    .eq("direction", "out").eq("status", "fallo").order("created_at", { ascending: false }).limit(5);
+  const lastIn = await lastRealInboundAt(admin, threadId);
+  return ((data as Array<{ error: string | null; created_at: string }> | null) ?? [])
+    .some((m) => isUnreachableError(m.error) && (!lastIn || Date.parse(m.created_at) > Date.parse(lastIn)));
+}
+
+/** El último mensaje de verdad de la clienta (sin los avisos que mete Meta). */
+async function lastRealInboundAt(admin: SupabaseClient, threadId: string): Promise<string | null> {
+  const { data } = await admin.from("social_messages").select("text,occurred_at").eq("thread_id", threadId)
+    .eq("direction", "in").order("occurred_at", { ascending: false }).limit(10);
+  const row = ((data as Array<{ text: string | null; occurred_at: string }> | null) ?? []).find((m) => !isMetaSystemNotice(m.text));
+  return row?.occurred_at ?? null;
 }
 
 /** La IA: null si no pudo responder (se cae a los textos fijos); [] si decidió no responder o no le toca. */
@@ -153,6 +181,7 @@ async function runAi(admin: SupabaseClient, ev: Exclude<NormalizedEvent, { kind:
   }
   const claimedAt = Date.parse(thread.claimed_at ?? "");
   if (thread.claimed_by && Number.isFinite(claimedAt) && Date.now() - claimedAt < HUMAN_HOLD_MS) return [];
+  if (ev.kind === "dm" && (isMetaSystemNotice(ev.message.text) || await metaRefusedBefore(admin, thread.id))) return [];
 
   const draft = await draftAiReply(admin, thread, phone);
   if (draft === "sin_turno") return [];
@@ -243,7 +272,11 @@ export async function answerPendingWithAi(admin: SupabaseClient, storeIds: strin
   const queue = [...rows];
   const worker = async () => {
     for (let row = queue.shift(); row; row = queue.shift()) {
-      if (row.kind === "dm" && dmReplyMode(row.last_inbound_at) !== "libre") { out.fueraDeVentana++; continue; }
+      if (row.kind === "dm") {
+        // La ventana cuenta desde el último mensaje de verdad (no los avisos de Meta), y si Meta ya dijo que no, no se insiste.
+        const realIn = await lastRealInboundAt(admin, row.id);
+        if (dmReplyMode(realIn) !== "libre" || await metaRefusedBefore(admin, row.id)) { out.fueraDeVentana++; continue; }
+      }
       const thread = await loadThread(admin, row.id);
       if (!thread?.store_id) { out.fallidas++; continue; }
       const claimedAt = Date.parse(thread.claimed_at ?? "");

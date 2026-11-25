@@ -44,9 +44,11 @@ export async function storeCatalog(admin: SupabaseClient, storeId: string): Prom
           return { name: p.name.trim(), price: Number.isFinite(price) && price > 0 ? price : null };
         });
     }
-  } catch {
+  } catch (e) {
     // Sin catálogo la IA no da precios: invita a WhatsApp.
+    console.warn(`[social-ai] catálogo no disponible (tienda ${storeId}): ${e instanceof Error ? e.message : String(e)}`);
   }
+  console.info(`[social-ai] catálogo tienda ${storeId}: ${items.length} productos`);
   catalogCache.set(storeId, { at: Date.now(), items });
   return items;
 }

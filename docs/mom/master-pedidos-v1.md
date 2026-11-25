@@ -17874,6 +17874,19 @@ estructurada (`lib/social-ai.ts`, `lib/social-ai-server.ts`):
   políticas de Meta siempre, para no incurrir en baneos»).
   Al terminar dice cuántas respondió, cuántas quedan para las asesoras, cuántas
   omitió y cuántas fallaron.
+- **Lo que Meta rechaza no se reintenta (primera pasada, 25-11-2026: 7 de 11
+  mensajes directos salieron; 3 Meta los rechazó con #551 «esta persona no está
+  disponible» —bloqueó la página o no recibe mensajes— y 1 con la ventana de 24
+  h cerrada en un chat que Meta abrió solo por un comentario).** Los avisos que
+  mete Meta («Facebook creó este chat porque…», «Estás respondiendo el
+  comentario…») no cuentan como mensaje de la clienta: no abren la ventana ni
+  ponen la conversación en «Por responder», y en el hilo se leen como «Aviso de
+  Meta» (`isMetaSystemNotice`). Si Meta ya rechazó un envío a esa persona por
+  #551 o por la ventana, la IA no vuelve a intentarlo hasta que la clienta
+  escriba de nuevo (`isUnreachableError`); queda para las asesoras. Un
+  comentario que ya no admite privado recibe solo la respuesta pública, completa
+  y sin prometer «te escribimos por interno». La IA habla como la tienda: no
+  menciona el catálogo ni lo que sabe o no sabe.
 
 Implementación: `lib/zernio.ts` (cliente), `lib/social-inbox.ts` (lectura de
 avisos y plazos de Meta, puro), `lib/zernio-signature.ts`,

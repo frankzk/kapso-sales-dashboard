@@ -5,6 +5,7 @@ import "server-only";
 // cliente de servicio: quien llama ya validó la firma o el acceso.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { isMetaSystemNotice } from "@/lib/social-ai";
 import { matchStoreForAccount, threadStatusAfter, type NormalizedAccount, type NormalizedComment, type NormalizedDm, type NormalizedEvent } from "@/lib/social-inbox";
 
 /** La fila de la cuenta, creada si no existía, con su tienda (la que ya tenía, o la que calza por nombre). */
@@ -104,7 +105,10 @@ export async function insertSocialMessage(admin: SupabaseClient, m: MessageInser
 export async function refreshThreadSummary(admin: SupabaseClient, threadId: string): Promise<void> {
   const { data } = await admin.from("social_messages").select("direction,text,occurred_at,attachments")
     .eq("thread_id", threadId).neq("status", "fallo").order("occurred_at", { ascending: false }).limit(200);
-  const rows = (data as Array<{ direction: "in" | "out"; text: string | null; occurred_at: string; attachments: unknown[] | null }> | null) ?? [];
+  const all = (data as Array<{ direction: "in" | "out"; text: string | null; occurred_at: string; attachments: unknown[] | null }> | null) ?? [];
+  // Los avisos que mete Meta («Facebook creó este chat porque…») no son de la clienta: no abren ni piden respuesta.
+  const real = all.filter((r) => !(r.direction === "in" && isMetaSystemNotice(r.text)));
+  const rows = real.length ? real : all;
   if (!rows.length) return;
   const last = rows[0]!;
   const lastIn = rows.find((r) => r.direction === "in");

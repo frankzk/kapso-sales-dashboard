@@ -4,7 +4,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
-import { buildSystemPrompt, buildUserPrompt, parseAiReply, sanitizeAiText, SOCIAL_AI_MODEL, type SocialAiInput } from "@/lib/social-ai";
+import { buildSystemPrompt, buildUserPrompt, isMetaSystemNotice, isUnreachableError, parseAiReply, sanitizeAiText, SOCIAL_AI_MODEL, type SocialAiInput } from "@/lib/social-ai";
 import { generateSocialAiReply } from "@/lib/social-ai-server";
 
 const WA = "https://wa.me/51989256981?text=Hola%2C%20vengo%20de%20redes";
@@ -124,7 +124,8 @@ describe("«Responder pendientes con IA»", () => {
   const src = read("lib/social-auto-server.ts");
   const fn = src.slice(src.indexOf("export async function answerPendingWithAi"));
   it("los mensajes directos solo dentro de 24 h: después Meta exige una persona", () => {
-    expect(fn).toContain('dmReplyMode(row.last_inbound_at) !== "libre"');
+    expect(fn).toContain('dmReplyMode(realIn) !== "libre"');
+    expect(fn).toContain("metaRefusedBefore(admin, row.id)");
     expect(fn).not.toContain("humanAgent");
   });
   it("no toca lo que una asesora abrió y usa las mismas llaves que lo automático", () => {
@@ -140,6 +141,29 @@ describe("«Responder pendientes con IA»", () => {
     const a = actions.slice(actions.indexOf("export async function answerPendingSocialWithAi"));
     expect(a.slice(0, 600)).toContain('perms.can("stores.manage")');
     expect(read("docs/mom/master-pedidos-v1.md")).toContain("«Responder pendientes con IA»");
+  });
+});
+
+describe("lo que falló en la primera pasada (25-11-2026)", () => {
+  it("los avisos de Meta no son de la clienta", () => {
+    expect(isMetaSystemNotice("Facebook creó este chat porque Williams comentó tu publicación. Williams no verá esto…")).toBe(true);
+    expect(isMetaSystemNotice("Estás respondiendo el comentario de un usuario en una publicación de tu página.")).toBe(true);
+    expect(isMetaSystemNotice("Gracias")).toBe(false);
+  });
+  it("lo que Meta rechaza por la persona o la ventana no se reintenta", () => {
+    expect(isUnreachableError("Zernio no lo envió: (#551) Esta persona no está disponible en este momento.")).toBe(true);
+    expect(isUnreachableError("Zernio no lo envió: Meta only allows replies within 24 hours of the person's last message, and that window has closed (Meta subcode 2018278)")).toBe(true);
+    expect(isUnreachableError("Zernio no lo envió: rate limit")).toBe(false);
+  });
+  it("sin privado, el público no promete «por interno» y puede llevar el WhatsApp", () => {
+    const u = buildUserPrompt({ ...INPUT, privateAvailable: false });
+    expect(u).toContain("<privado>no disponible");
+    const r = parseAiReply(JSON.stringify({ omitir: false, publico: `Hola, escríbenos por WhatsApp: ${WA}`, privado: "" }), "comment", WA)!;
+    expect(r.privateText).toBeNull();
+    expect(r.publicText).toContain(WA);
+  });
+  it("habla como la tienda: no menciona el catálogo ni lo que sabe", () => {
+    expect(buildSystemPrompt("Kenku Peru")).toContain("nunca menciones el catálogo");
   });
 });
 
