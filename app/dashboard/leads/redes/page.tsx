@@ -11,6 +11,8 @@ import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 import { SocialInbox, type SocialAccountView, type SocialThreadView } from "@/components/social-inbox";
 
 export const dynamic = "force-dynamic";
+// «Responder pendientes con IA» contesta decenas de conversaciones en una acción.
+export const maxDuration = 300;
 
 // Leads → Redes (MOM §25.4): comentarios y mensajes directos de Facebook e
 // Instagram de las tiendas, por Zernio. Lo ve quien ve Leads; solo sus tiendas (RLS).

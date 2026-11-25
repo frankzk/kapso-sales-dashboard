@@ -73,16 +73,24 @@ export function gfReportedStatus(code: string, subStatus: string | null): string
  */
 export const GF_STAGE_BACK_IN_WAREHOUSE = "BACK_IN_WAREHOUSE";
 
-/** ¿La guía ya tiene motorizado en GF? Devuelve el motivo para no anularla desde Kapta, o null. */
+/** Etapas de GF con el pedido asignado a un motorizado que todavía no sale (su carga se está armando). */
+const GF_STAGES_ASSIGNED = ["AWAITING_OFFICE_CHECK", "AWAITING_RIDER"];
+
+/**
+ * ¿La caja ya está en reparto con el motorizado? Devuelve el motivo para no anularla desde Kapta, o null.
+ *
+ * Es lo único que frena (owner, 25-11-2026: «la única limitante que deberíamos de poner es si la guía ya está en reparto
+ * con el motorizado»). Asignada a un motorizado pero sin salir (etapas `AWAITING_OFFICE_CHECK` / `AWAITING_RIDER`) ya no
+ * frena: GF la retira sola de la carga y la anula en el acto. Antes (17-11-2026) había que pedirle a GF que la retirara.
+ */
 export function gfCancelBlockedByRider(order: Pick<GfOrder, "status" | "stage">): string | null {
   const code = order.status?.code ?? "";
   const stage = order.stage?.code ?? "";
-  if (stage === "AWAITING_OFFICE_CHECK" || stage === "AWAITING_RIDER")
-    return `La guía ya está asignada a ${order.stage?.rider_name ?? "un motorizado"} en GF: no se anula desde Kapta. Pide a GF que la retire de la carga.`;
-  // Volvió por «no contestó» y está en el almacén de GF (owner, 24-11-2026, #KP206846, #KP206937, #KP206970): se anula.
-  if (code === "INCIDENT" && stage === GF_STAGE_BACK_IN_WAREHOUSE) return null;
+  // Volvió por «no contestó» y está en el almacén de GF, guardada o asignada a una carga nueva que todavía no sale
+  // (owner, 24-11-2026, #KP206846, #KP206937, #KP206970): se anula.
+  if (code === "INCIDENT" && (stage === GF_STAGE_BACK_IN_WAREHOUSE || GF_STAGES_ASSIGNED.includes(stage))) return null;
   if (["OUT_FOR_DELIVERY", "INCIDENT", "REFUSED", "RETURNING"].includes(code))
-    return "La guía ya salió con un motorizado: no se anula desde Kapta. Coordina el retorno con GF Courier.";
+    return "La guía ya está en reparto con un motorizado: no se anula desde Kapta. Coordina el retorno con GF Courier.";
   return null;
 }
 

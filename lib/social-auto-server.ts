@@ -6,7 +6,7 @@ import "server-only";
 // conversación, única en `social_messages`.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { NormalizedEvent } from "@/lib/social-inbox";
+import { dmReplyMode, privateReplyAllowed, type NormalizedEvent } from "@/lib/social-inbox";
 import { autoTexts, DEFAULT_COMMENT_KEYWORDS, hasBuyingIntent, whatsappLink, type SocialAutoSettings } from "@/lib/social-auto";
 import { sendSocial, type SendableThread } from "@/lib/social-send";
 import { loadStoreOrderPlatform, wooSaleClient } from "@/lib/woocommerce-orders";
@@ -14,6 +14,7 @@ import { wooGetPage } from "@/lib/woocommerce";
 import { withWooAuthFallback } from "@/lib/woocommerce-intake";
 import { zernioConfigured } from "@/lib/zernio";
 import { generateSocialAiReply, socialAiConfigured, storeCatalog } from "@/lib/social-ai-server";
+import type { SocialAiReply } from "@/lib/social-ai";
 
 export async function loadAutoSettings(admin: SupabaseClient, storeId: string): Promise<SocialAutoSettings | null> {
   const { data } = await admin.from("social_auto_settings").select("enabled,comment_keywords,public_text,private_text,dm_text").eq("store_id", storeId).maybeSingle();
@@ -63,6 +64,8 @@ export async function productForAd(admin: SupabaseClient, storeId: string, adId:
 const DM_SETTLE_MS = 8_000;
 /** Si una asesora abrió el hilo hace menos de 10 minutos, la IA no se mete. */
 const HUMAN_HOLD_MS = 10 * 60_000;
+/** «Responder pendientes con IA»: pausa entre envíos de cada uno de los tres turnos. */
+const BULK_PAUSE_MS = 2_000;
 
 /**
  * Lo automático de un aviso ya guardado en `threadId`. No hace nada si la
@@ -88,7 +91,7 @@ export async function runSocialAutoReplies(admin: SupabaseClient, ev: Normalized
   return runTemplates(admin, ev, thread, settings, phone);
 }
 
-type AutoThread = SendableThread & {
+export type AutoThread = SendableThread & {
   ad_id: string | null; participant_name: string | null; private_reply_at: string | null; post_text: string | null;
   platform: string; claimed_by: string | null; claimed_at: string | null;
 };
@@ -98,6 +101,39 @@ async function loadThread(admin: SupabaseClient, threadId: string): Promise<Auto
     .select("id,store_id,account_id,kind,external_id,post_id,ad_id,participant_name,private_reply_at,post_text,platform,claimed_by,claimed_at")
     .eq("id", threadId).maybeSingle();
   return (data as AutoThread | null) ?? null;
+}
+
+/**
+ * La respuesta de la IA para un hilo, sin mandarla (la usa lo automático y el
+ * botón «Sugerir con IA»). "sin_turno" si lo último no es de la clienta; null
+ * si la IA no pudo (sin clave, sin WhatsApp de la tienda, error, negativa).
+ */
+export async function draftAiReply(admin: SupabaseClient, thread: AutoThread, phone: string | null): Promise<SocialAiReply | "sin_turno" | null> {
+  const storeId = thread.store_id;
+  if (!storeId) return null;
+  const [{ data: store }, catalog, adProduct, { data: rows }] = await Promise.all([
+    admin.from("stores").select("name").eq("id", storeId).maybeSingle(),
+    storeCatalog(admin, storeId),
+    productForAd(admin, storeId, thread.ad_id),
+    admin.from("social_messages").select("direction,text").eq("thread_id", thread.id).neq("status", "fallo")
+      .order("occurred_at", { ascending: false }).limit(12),
+  ]);
+  const link = whatsappLink(phone, adProduct.title ? `Hola, quiero ${adProduct.title}` : "Hola, vengo de redes y quiero información");
+  if (!link) return null;
+  const history = ((rows as Array<{ direction: "in" | "out"; text: string | null }> | null) ?? [])
+    .reverse().filter((m) => m.text?.trim()).map((m) => ({ from: m.direction === "in" ? "cliente" as const : "tienda" as const, text: m.text! }));
+  if (!history.length || history[history.length - 1]!.from !== "cliente") return "sin_turno";
+  return generateSocialAiReply({
+    storeName: (store as { name: string } | null)?.name ?? "la tienda",
+    platform: thread.platform, kind: thread.kind, whatsapp: link, catalog,
+    adProduct: adProduct.title ? { name: adProduct.title, price: adProduct.price } : null,
+    postText: thread.post_text, customerName: thread.participant_name, history,
+  });
+}
+
+/** El hilo con lo que necesita lo automático. */
+export async function loadAutoThread(admin: SupabaseClient, threadId: string): Promise<AutoThread | null> {
+  return loadThread(admin, threadId);
 }
 
 /** La IA: null si no pudo responder (se cae a los textos fijos); [] si decidió no responder o no le toca. */
@@ -118,25 +154,9 @@ async function runAi(admin: SupabaseClient, ev: Exclude<NormalizedEvent, { kind:
   const claimedAt = Date.parse(thread.claimed_at ?? "");
   if (thread.claimed_by && Number.isFinite(claimedAt) && Date.now() - claimedAt < HUMAN_HOLD_MS) return [];
 
-  const [{ data: store }, catalog, adProduct, { data: rows }] = await Promise.all([
-    admin.from("stores").select("name").eq("id", storeId).maybeSingle(),
-    storeCatalog(admin, storeId),
-    productForAd(admin, storeId, thread.ad_id),
-    admin.from("social_messages").select("direction,text").eq("thread_id", thread.id).neq("status", "fallo")
-      .order("occurred_at", { ascending: false }).limit(12),
-  ]);
-  const link = whatsappLink(phone, adProduct.title ? `Hola, quiero ${adProduct.title}` : "Hola, vengo de redes y quiero información");
-  if (!link) return null;
-  const history = ((rows as Array<{ direction: "in" | "out"; text: string | null }> | null) ?? [])
-    .reverse().filter((m) => m.text?.trim()).map((m) => ({ from: m.direction === "in" ? "cliente" as const : "tienda" as const, text: m.text! }));
-  if (!history.length || history[history.length - 1]!.from !== "cliente") return [];
-
-  const reply = await generateSocialAiReply({
-    storeName: (store as { name: string } | null)?.name ?? "la tienda",
-    platform: thread.platform, kind: thread.kind, whatsapp: link, catalog,
-    adProduct: adProduct.title ? { name: adProduct.title, price: adProduct.price } : null,
-    postText: thread.post_text, customerName: thread.participant_name, history,
-  });
+  const draft = await draftAiReply(admin, thread, phone);
+  if (draft === "sin_turno") return [];
+  const reply = draft;
   if (!reply) return null;
   if (reply.skip) return [];
 
@@ -193,4 +213,67 @@ async function runTemplates(admin: SupabaseClient, ev: Exclude<NormalizedEvent, 
   const r = await sendSocial(admin, thread, { text: dmText, mode: "dm", userId: null, via: "auto", idempotencyKey: `auto:dm:${thread.id}` });
   if (r.ok) done.push("dm");
   return done;
+}
+
+export interface PendingAiResult {
+  respondidas: number;
+  omitidas: number;
+  /** Mensajes directos de más de 24 h: Meta solo deja escribir a una persona (la asesora, con «Sugerir con IA»). */
+  fueraDeVentana: number;
+  tomadas: number;
+  fallidas: number;
+}
+
+/**
+ * «Responder pendientes con IA» (owner, 25-11-2026: «¿no puedes responder todo
+ * lo pendiente?»): pasa la IA por lo que está en «Por responder» de las tiendas
+ * dadas. Comentario: público y privado (si aún se puede). Mensaje directo: solo
+ * dentro de las 24 h (después Meta exige una persona). No toca lo que una
+ * asesora abrió hace menos de 10 minutos. Las llaves son las de lo automático:
+ * nada sale dos veces.
+ */
+export async function answerPendingWithAi(admin: SupabaseClient, storeIds: string[]): Promise<PendingAiResult> {
+  const out: PendingAiResult = { respondidas: 0, omitidas: 0, fueraDeVentana: 0, tomadas: 0, fallidas: 0 };
+  if (!storeIds.length || !socialAiConfigured() || !zernioConfigured()) return out;
+  const { data } = await admin.from("social_threads").select("id,kind,last_inbound_at")
+    .in("store_id", storeIds).eq("status", "abierto").eq("last_direction", "in")
+    .order("last_message_at", { ascending: false }).limit(80);
+  const rows = (data as Array<{ id: string; kind: "dm" | "comment"; last_inbound_at: string | null }> | null) ?? [];
+  const phones = new Map<string, string | null>();
+  const queue = [...rows];
+  const worker = async () => {
+    for (let row = queue.shift(); row; row = queue.shift()) {
+      if (row.kind === "dm" && dmReplyMode(row.last_inbound_at) !== "libre") { out.fueraDeVentana++; continue; }
+      const thread = await loadThread(admin, row.id);
+      if (!thread?.store_id) { out.fallidas++; continue; }
+      const claimedAt = Date.parse(thread.claimed_at ?? "");
+      if (thread.claimed_by && Number.isFinite(claimedAt) && Date.now() - claimedAt < HUMAN_HOLD_MS) { out.tomadas++; continue; }
+      if (!phones.has(thread.store_id)) phones.set(thread.store_id, await storeWhatsappPhone(admin, thread.store_id));
+      const draft = await draftAiReply(admin, thread, phones.get(thread.store_id) ?? null);
+      if (draft === "sin_turno" || draft?.skip) { out.omitidas++; continue; }
+      if (!draft) { out.fallidas++; continue; }
+      const { data: lastIn } = await admin.from("social_messages").select("external_id,occurred_at").eq("thread_id", thread.id)
+        .eq("direction", "in").order("occurred_at", { ascending: false }).limit(1).maybeSingle();
+      const last = lastIn as { external_id: string | null; occurred_at: string } | null;
+      let sent = false;
+      if (thread.kind === "comment") {
+        if (draft.publicText) sent = (await sendSocial(admin, thread, { text: draft.publicText, mode: "public", userId: null, via: "auto", idempotencyKey: `ai:pub:${thread.external_id}` })).ok || sent;
+        // Los 7 días cuentan desde el comentario (no desde que Kapta lo trajo).
+        const { data: firstIn } = await admin.from("social_messages").select("occurred_at").eq("thread_id", thread.id)
+          .eq("direction", "in").order("occurred_at").limit(1).maybeSingle();
+        const commentAt = (firstIn as { occurred_at: string } | null)?.occurred_at ?? null;
+        if (draft.privateText && privateReplyAllowed({ kind: "comment", private_reply_at: thread.private_reply_at }, commentAt)) {
+          sent = (await sendSocial(admin, thread, { text: draft.privateText, mode: "private", userId: null, via: "auto", idempotencyKey: `ai:priv:${thread.external_id}` })).ok || sent;
+        }
+      } else if (draft.privateText) {
+        const key = `ai:dm:${last?.external_id ?? `${thread.id}:${last?.occurred_at ?? ""}`}`;
+        sent = (await sendSocial(admin, thread, { text: draft.privateText, mode: "dm", userId: null, via: "auto", idempotencyKey: key })).ok;
+      }
+      if (sent) out.respondidas++; else out.fallidas++;
+      // Sin ráfagas: una pausa entre envíos para no parecer spam ante Meta.
+      await new Promise((r) => setTimeout(r, BULK_PAUSE_MS));
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
+  return out;
 }

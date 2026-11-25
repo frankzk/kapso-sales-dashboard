@@ -13,6 +13,8 @@ import { dmReplyMode, isSocialPlatform, privateReplyAllowed, type NormalizedComm
 import { applySocialEvent, upsertSocialAccount } from "@/lib/social-inbox-store";
 import { sendSocial } from "@/lib/social-send";
 import { zernio, zernioConfigured, ZernioError } from "@/lib/zernio";
+import { socialAiConfigured } from "@/lib/social-ai-server";
+import { answerPendingWithAi, draftAiReply, loadAutoThread, storeWhatsappPhone, type PendingAiResult } from "@/lib/social-auto-server";
 
 const PATH = "/dashboard/leads/redes";
 const MAX_TEXT = 1000;
@@ -255,6 +257,42 @@ export async function syncZernioInbox(): Promise<Result> {
   }
   revalidatePath(PATH);
   return { ok: true, notice: `Sincronizado: ${conversations} conversaciones y ${comments} comentarios.` };
+}
+
+/**
+ * «Sugerir con IA»: la respuesta que escribiría Claude Haiku 5.5 para este hilo,
+ * sin mandarla (la asesora la revisa y la envía). Misma regla y mismo filtro que
+ * lo automático (MOM §25.4 fase 4). Lo ve quien ve el hilo.
+ */
+export async function suggestSocialReply(threadId: string): Promise<{ ok: true; publicText: string | null; privateText: string | null } | { ok: false; error: string }> {
+  if (!socialAiConfigured()) return { ok: false, error: "Falta la clave de la IA (ANTHROPIC_API_KEY en Vercel)." };
+  const got = await sessionThread(threadId);
+  if ("error" in got) return { ok: false, error: got.error };
+  const admin = createAdminSupabase();
+  const thread = await loadAutoThread(admin, threadId);
+  if (!thread?.store_id) return { ok: false, error: "La conversación no tiene tienda." };
+  const draft = await draftAiReply(admin, thread, await storeWhatsappPhone(admin, thread.store_id));
+  if (draft === "sin_turno") return { ok: false, error: "Lo último ya lo respondió la tienda." };
+  if (!draft) return { ok: false, error: "La IA no pudo responder ahora. Inténtalo otra vez o escribe la respuesta." };
+  if (draft.skip) return { ok: false, error: "La IA no lo respondería: es solo emojis, una etiqueta o spam." };
+  return { ok: true, publicText: draft.publicText, privateText: draft.privateText };
+}
+
+/**
+ * «Responder pendientes con IA»: la IA contesta lo que está en «Por responder»
+ * (comentarios en público y por privado; mensajes directos dentro de 24 h).
+ * Pide «Tiendas». Ver `answerPendingWithAi`.
+ */
+export async function answerPendingSocialWithAi(): Promise<{ ok: true; result: PendingAiResult } | { ok: false; error: string }> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("stores.manage")) return { ok: false, error: "Solo quien gestiona las tiendas puede responder lo pendiente con IA." };
+  if (!socialAiConfigured()) return { ok: false, error: "Falta la clave de la IA (ANTHROPIC_API_KEY en Vercel)." };
+  if (!zernioConfigured()) return { ok: false, error: "Falta conectar Zernio (ZERNIO_API_KEY en Vercel)." };
+  const sb = await createServerSupabase();
+  const { data: stores } = await sb.from("stores").select("id");
+  const result = await answerPendingWithAi(createAdminSupabase(), ((stores as Array<{ id: string }> | null) ?? []).map((s) => s.id));
+  revalidatePath(PATH);
+  return { ok: true, result };
 }
 
 export interface SocialAutoSettingsView {

@@ -15,6 +15,8 @@ import {
   saveSocialAutoSettings,
   setSocialAccountStore,
   setSocialThreadStatus,
+  suggestSocialReply,
+  answerPendingSocialWithAi,
   syncZernioInbox,
   type SocialAutoSettingsView,
   type SocialMessageView,
@@ -141,6 +143,7 @@ export function SocialInbox({ threads, accounts, stores, canManage, configured, 
   const [autoOpen, setAutoOpen] = useState(false);
   const [syncing, startSync] = useTransition();
   const [syncNotice, setSyncNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  const [answering, startAnswer] = useTransition();
   const [now, setNow] = useState(() => Date.now());
 
   // Lo nuevo llega por el webhook: la lista se refresca sola cada 20 s, y la espera se recuenta.
@@ -179,6 +182,25 @@ export function SocialInbox({ threads, accounts, stores, canManage, configured, 
     startSync(async () => {
       const res = await syncZernioInbox();
       setSyncNotice(res.ok ? { ok: true, text: res.notice ?? "Sincronizado." } : { ok: false, text: res.error });
+      router.refresh();
+    });
+  }
+
+  function answerPending() {
+    if (!window.confirm(`La IA va a responder lo que está en «Por responder» (${counts.pendientes}): los comentarios en público y por privado, y los mensajes directos de las últimas 24 horas. Lo que una asesora abrió hace menos de 10 minutos no se toca. ¿Seguimos?`)) return;
+    setSyncNotice(null);
+    startAnswer(async () => {
+      const res = await answerPendingSocialWithAi();
+      if (!res.ok) { setSyncNotice({ ok: false, text: res.error }); return; }
+      const r = res.result;
+      const parts = [
+        `${r.respondidas} respondidas`,
+        r.fueraDeVentana ? `${r.fueraDeVentana} mensajes de más de 24 h quedan para las asesoras (Meta solo deja escribir a una persona: usa «Sugerir con IA» y envía)` : null,
+        r.omitidas ? `${r.omitidas} sin responder (solo emojis, etiquetas o spam)` : null,
+        r.tomadas ? `${r.tomadas} las está atendiendo una asesora` : null,
+        r.fallidas ? `${r.fallidas} no se pudieron enviar` : null,
+      ].filter(Boolean);
+      setSyncNotice({ ok: r.fallidas === 0, text: `IA: ${parts.join(" · ")}.` });
       router.refresh();
     });
   }
@@ -223,6 +245,12 @@ export function SocialInbox({ threads, accounts, stores, canManage, configured, 
               Respuestas automáticas
               <Badge tone={autoOn ? "ok" : "neutral"}>{autoOn ? `${autoOn} de ${autoSettings.length}` : "Apagadas"}</Badge>
             </OpsButton>
+            {configured && aiReady && counts.pendientes > 0 && (
+              <OpsButton onClick={answerPending} disabled={answering} title="La IA responde lo que está en «Por responder»">
+                <IconBot className={cn(answering && "motion-safe:animate-pulse")} />
+                {answering ? "Respondiendo…" : "Responder pendientes con IA"}
+              </OpsButton>
+            )}
             {configured && (
               <OpsButton onClick={sync} disabled={syncing} title="Trae de Zernio las cuentas, las últimas conversaciones y los últimos comentarios">
                 <IconRepeat className={cn(syncing && "motion-safe:animate-spin")} />
@@ -357,6 +385,7 @@ export function SocialInbox({ threads, accounts, stores, canManage, configured, 
               whatsapp={selected.store_id ? whatsappByStore[selected.store_id] ?? null : null}
               onBack={() => setSelectedId(null)}
               onChanged={() => router.refresh()}
+              aiReady={aiReady}
               onResolved={() => openNextAfter(selected.id)}
             />
           ) : (
@@ -388,8 +417,9 @@ function Avatar({ name, picture }: { name: string; picture: string | null }) {
 
 type ReplyMode = "dm" | "public" | "private";
 
-function ThreadPanel({ thread, storeName, whatsapp, onBack, onChanged, onResolved }: {
+function ThreadPanel({ thread, storeName, whatsapp, aiReady, onBack, onChanged, onResolved }: {
   thread: SocialThreadView;
+  aiReady: boolean;
   storeName: string | null;
   whatsapp: string | null;
   onBack: () => void;
@@ -407,6 +437,9 @@ function ThreadPanel({ thread, storeName, whatsapp, onBack, onChanged, onResolve
   const [loadError, setLoadError] = useState<string | null>(null);
   const [text, setText] = useState("");
   const [mode, setMode] = useState<ReplyMode>(thread.kind === "dm" ? "dm" : "public");
+  // «Sugerir con IA»: el borrador de Claude Haiku 5.5; en un comentario trae el público y el privado.
+  const [suggestion, setSuggestion] = useState<{ public: string | null; private: string | null } | null>(null);
+  const [suggesting, startSuggest] = useTransition();
   const [sending, startSend] = useTransition();
   const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
   const field = useRef<HTMLTextAreaElement>(null);
@@ -465,6 +498,25 @@ function ThreadPanel({ thread, storeName, whatsapp, onBack, onChanged, onResolve
       onChanged();
       if (closing) onResolved();
     });
+  }
+
+  function suggest() {
+    setFeedback(null);
+    startSuggest(async () => {
+      const res = await suggestSocialReply(thread.id);
+      if (!res.ok) { setFeedback({ ok: false, text: res.error }); return; }
+      const next = { public: res.publicText, private: res.privateText };
+      setSuggestion(next);
+      const forMode = thread.kind === "dm" ? next.private : mode === "private" ? next.private : next.public;
+      setText(forMode ?? "");
+      field.current?.focus();
+    });
+  }
+
+  /** Al cambiar entre público y privado, el borrador de la IA cambia con él (si no se tocó). */
+  function changeMode(next: "public" | "private") {
+    if (suggestion && text === (mode === "private" ? suggestion.private : suggestion.public)) setText((next === "private" ? suggestion.private : suggestion.public) ?? "");
+    setMode(next);
   }
 
   function toWhatsapp() {
@@ -598,15 +650,21 @@ function ThreadPanel({ thread, storeName, whatsapp, onBack, onChanged, onResolve
           <div className="flex flex-wrap items-center gap-2 px-2 pb-2 pt-1">
             {thread.kind === "comment" && (
               <div role="radiogroup" aria-label="Cómo responder" className="inline-flex rounded-lg bg-wash p-0.5 ring-1 ring-inset ring-line">
-                <ModeOption label="En público" active={mode === "public"} onClick={() => setMode("public")} disabled={blocked} />
+                <ModeOption label="En público" active={mode === "public"} onClick={() => changeMode("public")} disabled={blocked} />
                 <ModeOption
                   label="Por privado"
                   active={mode === "private"}
-                  onClick={() => setMode("private")}
+                  onClick={() => changeMode("private")}
                   disabled={blocked || !canPrivate}
                   title={canPrivate ? "Meta permite una sola respuesta por privado por comentario, dentro de 7 días" : "Ya se usó la respuesta por privado o pasaron 7 días"}
                 />
               </div>
+            )}
+            {aiReady && !blocked && (
+              <OpsButton size="sm" variant="ghost" onClick={suggest} disabled={suggesting} title="Claude Haiku 5.5 escribe la respuesta; la revisas y la envías" className="pointer-coarse:h-11">
+                <IconBot />
+                {suggesting ? "Escribiendo…" : "Sugerir con IA"}
+              </OpsButton>
             )}
             {whatsapp && !blocked && (
               <OpsButton size="sm" variant="ghost" onClick={toWhatsapp} title="Escribe un mensaje con el WhatsApp de la tienda" className="pointer-coarse:h-11">

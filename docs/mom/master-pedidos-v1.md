@@ -17886,6 +17886,25 @@ estructurada (`lib/social-ai.ts`, `lib/social-ai-server.ts`):
   dato, no una orden para el modelo.
 - **Si la IA no responde** (sin clave, error, negativa o formato inválido) salen
   los textos fijos de la fase 3. Llaves: `ai:pub:`, `ai:priv:`, `ai:dm:`.
+- **«Sugerir con IA»** (botón en la respuesta de cada conversación, para quien
+  la ve; `suggestSocialReply`): la misma IA, la misma regla y el mismo filtro
+  escriben el borrador en el campo, **sin enviarlo**; en un comentario trae el
+  público y el privado, y cambia con «En público / Por privado». Sirve para
+  probar a Haiku con conversaciones reales antes de dejarlo solo, y para que la
+  asesora responda más rápido.
+- **«Responder pendientes con IA»** (owner, 25-11-2026: «¿no puedes responder
+  todo lo pendiente?»; botón de la cabecera, permiso «Tiendas»,
+  `answerPendingWithAi`): pasa la IA por lo que está en «Por responder», tres a
+  la vez. Comentario: público y privado (el privado, si no se usó y el
+  comentario tiene menos de 7 días). **Mensaje directo: solo dentro de las 24 h
+  del último mensaje de la clienta**; después Meta exige que escriba una persona
+  (`HUMAN_AGENT`), así que esos quedan para las asesoras, que pueden usar
+  «Sugerir con IA» y enviarlo. No toca lo que una asesora abrió hace menos de 10
+  minutos. Usa las mismas llaves que lo automático, así que nada sale dos veces, y deja 2
+  segundos entre envíos para no salir en ráfaga (owner: «cumpliendo las
+  políticas de Meta siempre, para no incurrir en baneos»).
+  Al terminar dice cuántas respondió, cuántas quedan para las asesoras, cuántas
+  omitió y cuántas fallaron.
 
 Implementación: `lib/zernio.ts` (cliente), `lib/social-inbox.ts` (lectura de
 avisos y plazos de Meta, puro), `lib/zernio-signature.ts`,
@@ -21100,9 +21119,19 @@ panel suelto y su entrada «GF Courier» en el índice de la ficha se retiraron.
 - **Grupo GF ya no sale con salidas nuevas (owner, 17-11-2026).** «Tomar pedidos» ya no crea cajas de Grupo GF en las
   tiendas con GF Courier por API (Kenku y Aurela, desde el 16-11) y «Sacar con salida nueva» queda cerrado
   (`GRUPO_GF_NEW_OUTPUTS_CLOSED`); las salidas que ya existen siguen su curso (asignar, cotejar, reportar, retornar). El reparto en Lima va por GF Courier.
-- **Con motorizado no se anula desde Kapta.** Antes de pedir la anulación, `cancelGfGuideFor` lee la guía en GF: si
-  está asignada a un motorizado (etapa `AWAITING_OFFICE_CHECK` o `AWAITING_RIDER`) o ya salió (`OUT_FOR_DELIVERY`,
-  `INCIDENT`, `REFUSED`, `RETURNING`), no la anula y dice por qué (`gfCancelBlockedByRider`).
+- **Solo en reparto con el motorizado no se anula desde Kapta (owner, 25-11-2026, #AUR901417: «la única limitante que
+  deberíamos de poner es si la guía ya está en reparto con el motorizado»).** Antes de pedir la anulación,
+  `cancelGfGuideFor` lee la guía en GF: si la caja ya salió (`OUT_FOR_DELIVERY`, `INCIDENT` sin volver al almacén,
+  `REFUSED`, `RETURNING`), no la anula y dice por qué (`gfCancelBlockedByRider`). **Asignada a un motorizado pero sin
+  salir** (etapa `AWAITING_OFFICE_CHECK` o `AWAITING_RIDER`) ya no frena: Kapta pide la anulación y GF la retira sola de
+  la carga que se está armando (queda en Despacho como retirada, «Anulado por la tienda»), la anula en el acto y la carga
+  sigue con los demás pedidos. Vale para «Anular en GF Courier», para la guía de Aliclik o Swayp que la reemplaza y para
+  el acuerdo de Repro Lima con otro courier. Hasta el 24-11 (regla del 17-11: «con motorizado no se anula desde Kapta»)
+  había que pedirle a GF que la retirara de la carga, y esa espera podía durar toda la mañana.
+- **Anulada en el acto también si ya había salido una vez (GF 087, 25-11-2026).** #AUR901417, #AUR901330, #AUR901448 y
+  #AUR901420 salieron, no contestaron, volvieron, se desarmaron y se armaron de nuevo; al pasarlos a Aliclik quedaron en
+  «Anulación en curso» en GF hasta «Confirmar desarmado», porque GF no completaba sola la anulación de ningún pedido que
+  hubiera estado alguna vez en una carga. Corregido en GF: quedan anulados en el acto como cualquier otro.
 - **La caja que volvió al almacén de GF sí se anula (owner, 24-11-2026, #KP206846, #KP206937, #KP206970: «no me deja
   anular la guía de GF para registrarlo con Aliclik»).** Las tres salieron el 17-11 con Alexis, no contestaron y
   volvieron al almacén de GF, que las dejó guardadas («sale cuando la tienda pida una nueva fecha, o se desarma si la
