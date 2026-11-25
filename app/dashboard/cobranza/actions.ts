@@ -3,19 +3,19 @@
 // Las acciones de la cola de cobranza: lo que la pantalla necesita para
 // enseñarle a cada uno SUS alertas y dejarle tomarlas, pasarlas o cerrarlas.
 //
-// El escalamiento se reconcilia AQUÍ, al listar, y no en un cron. Dos razones:
-// quien abre la pantalla ve el estado de verdad y no uno de hace media hora, y
-// el escalamiento ocurre aunque no haya ningún cron mirando. Cuesta una
-// consulta por pasada y se ahorra una pieza que puede caerse en silencio.
+// QUIÉN HACE AVANZAR LOS AVISOS (owner, 25-11-2026). Hasta entonces el
+// escalamiento se reconciliaba AQUÍ, en cada listado: quien abre la pantalla ve
+// el estado de verdad, y ocurre aunque no haya ningún cron mirando. Pero cada
+// pestaña lista cada 20 s, y eran unas 150 pasadas por minuto. Ahora un proceso
+// los hace avanzar cada 5 minutos, haya o no alguien conectado, y este listado
+// lo sigue haciendo como mucho una vez por minuto por servidor y tienda: si el
+// proceso se cayera en silencio, los avisos seguirían avanzando como siempre.
+// Ver lib/collection-alerts-advance.ts.
 
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { resolveAgentNames } from "@/lib/agent-names";
-import {
-  reconcileCollectionOffers,
-  resolveCollectionAlert,
-  sweepResolvedAlerts,
-  sweepUnattributedAlerts,
-} from "@/lib/collection-alerts-access";
+import { resolveCollectionAlert } from "@/lib/collection-alerts-access";
+import { advanceCollectionAlerts, claimAdvanceTurn } from "@/lib/collection-alerts-advance";
 import { alertVisibleTo, waitingMinutes } from "@/lib/collection-escalation";
 import { getMasterPermissions } from "@/lib/permissions-access";
 
@@ -62,14 +62,14 @@ export async function listMyCollectionAlerts(): Promise<CollectionAlertView[]> {
 
   const admin = createAdminSupabase();
   const nowMs = Date.now();
-  const nowIso = new Date(nowMs).toISOString();
   for (const s of stores) {
-    // Primero se retira lo que ya está hecho y después se hace avanzar la
-    // escalera: al revés, una alerta resuelta podría escalar a otra persona
-    // justo antes de retirarse, y ésa recibiría un aviso de trabajo hecho.
-    await sweepResolvedAlerts(admin, s.id, nowIso);
-    await sweepUnattributedAlerts(admin, s.id, nowIso);
-    await reconcileCollectionOffers(admin, s.id, nowMs);
+    // Como mucho una vez por minuto por servidor y tienda; entre medias, esta
+    // consulta solo lee. Primero se retira lo que ya está hecho y después se
+    // hace avanzar la escalera (`advanceCollectionAlerts`): al revés, una
+    // alerta resuelta podría escalar a otra persona justo antes de retirarse,
+    // y ésa recibiría un aviso de trabajo hecho.
+    if (!claimAdvanceTurn(s.id, nowMs)) continue;
+    await advanceCollectionAlerts(admin, s.id, nowMs);
   }
 
   // Se traen las abiertas de sus tiendas y el filtro lo hace `alertVisibleTo`,

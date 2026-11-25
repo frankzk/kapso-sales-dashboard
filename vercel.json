@@ -138,7 +138,7 @@
       "schedule": "23 * * * *"
     },
     {
-      "path": "/api/cron/invoice-snapshots",
+      "path": "/api/cron/collection-alerts",
       "schedule": "2-57/5 * * * *"
     },
     {
