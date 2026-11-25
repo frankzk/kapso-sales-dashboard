@@ -17689,10 +17689,16 @@ quedan visibles: los atiende la asesora; Kapta no oculta nada solo.
   quien gestiona tiendas la elige en la pantalla. Las asesoras ven solo sus
   tiendas (RLS).
 - **La pantalla.** Menú «Redes (FB / IG)» (`/dashboard/leads/redes`): «Por
-  responder» (abierto y lo último lo dijo la clienta), «Todos» y «Cerrados»;
-  filtro por red y por tipo. El hilo abierto muestra el post o anuncio del
-  comentario, los mensajes (quién respondió: Kapta con la asesora, «Automático»
-  o «Desde Meta») y la respuesta. Se refresca cada 20 segundos.
+  responder» (abierto y lo último lo dijo la clienta), «Abiertas» (todo lo no
+  resuelto) y «Resueltas»; chips de red y de tipo con su cuenta (volver a tocar
+  uno lo quita) y búsqueda por nombre o texto. Arriba, cuántas hay por
+  responder y cuánto espera la más antigua; en cada fila, lo que lleva
+  esperando (en tono de atención desde 1 hora) y, en un mensaje directo, «Más
+  de 24 h» o «Sin ventana». El hilo abierto muestra el post o anuncio del
+  comentario, los mensajes (quién respondió: la asesora, «Respuesta
+  automática» o «Desde Meta») y la respuesta: Ctrl + Enter envía, y
+  «Marcar resuelta» pasa a la siguiente de la lista. Se refresca cada 20
+  segundos.
 - **Responder.** Un comentario se responde **en público** o **por privado**: el
   privado es **uno solo por comentario y dentro de 7 días** (Meta); en
   Instagram, a quien no sigue la cuenta, solo texto. Un mensaje directo se
@@ -17700,7 +17706,7 @@ quedan visibles: los atiende la asesora; Kapta no oculta nada solo.
   a 7 días** solo si lo escribe una persona (Kapta lo manda con la etiqueta
   `HUMAN_AGENT`); **pasados 7 días** Meta no deja escribir hasta que la clienta
   vuelva a escribir. Cada envío lleva una llave de idempotencia: un reintento no
-  manda dos veces. «Marcar resuelto» cierra el hilo; un mensaje nuevo de la
+  manda dos veces. «Marcar resuelta» cierra el hilo; un mensaje nuevo de la
   clienta lo reabre.
 - **Lo anterior al webhook.** «Sincronizar redes» (permiso «Tiendas») trae de
   Zernio las cuentas, las últimas 30 conversaciones y los últimos 15 posts con
@@ -17724,7 +17730,8 @@ quedan visibles: los atiende la asesora; Kapta no oculta nada solo.
 
 **Fase 3: respuestas automáticas (`lib/social-auto.ts`).** Nacen **apagadas**:
 las enciende por tienda quien gestiona tiendas en Leads → Redes → «Respuestas
-automáticas» (`social_auto_settings`), con sus textos y palabras.
+automáticas» (un panel lateral, `social_auto_settings`), con sus textos y
+palabras.
 
 - **Comentario de una clienta con palabras de compra** («precio», «cuánto»,
   «info», «envío», «provincia», «me interesa», «interno»…; por palabra entera y
