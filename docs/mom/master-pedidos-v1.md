@@ -17861,6 +17861,19 @@ estructurada (`lib/social-ai.ts`, `lib/social-ai-server.ts`):
   público y el privado, y cambia con «En público / Por privado». Sirve para
   probar a Haiku con conversaciones reales antes de dejarlo solo, y para que la
   asesora responda más rápido.
+- **«Responder pendientes con IA»** (owner, 25-11-2026: «¿no puedes responder
+  todo lo pendiente?»; botón de la cabecera, permiso «Tiendas»,
+  `answerPendingWithAi`): pasa la IA por lo que está en «Por responder», tres a
+  la vez. Comentario: público y privado (el privado, si no se usó y el
+  comentario tiene menos de 7 días). **Mensaje directo: solo dentro de las 24 h
+  del último mensaje de la clienta**; después Meta exige que escriba una persona
+  (`HUMAN_AGENT`), así que esos quedan para las asesoras, que pueden usar
+  «Sugerir con IA» y enviarlo. No toca lo que una asesora abrió hace menos de 10
+  minutos. Usa las mismas llaves que lo automático, así que nada sale dos veces, y deja 2
+  segundos entre envíos para no salir en ráfaga (owner: «cumpliendo las
+  políticas de Meta siempre, para no incurrir en baneos»).
+  Al terminar dice cuántas respondió, cuántas quedan para las asesoras, cuántas
+  omitió y cuántas fallaron.
 
 Implementación: `lib/zernio.ts` (cliente), `lib/social-inbox.ts` (lectura de
 avisos y plazos de Meta, puro), `lib/zernio-signature.ts`,

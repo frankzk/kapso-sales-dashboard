@@ -6,7 +6,7 @@ import "server-only";
 // conversación, única en `social_messages`.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { NormalizedEvent } from "@/lib/social-inbox";
+import { dmReplyMode, privateReplyAllowed, type NormalizedEvent } from "@/lib/social-inbox";
 import { autoTexts, DEFAULT_COMMENT_KEYWORDS, hasBuyingIntent, whatsappLink, type SocialAutoSettings } from "@/lib/social-auto";
 import { sendSocial, type SendableThread } from "@/lib/social-send";
 import { loadStoreOrderPlatform, wooSaleClient } from "@/lib/woocommerce-orders";
@@ -64,6 +64,8 @@ export async function productForAd(admin: SupabaseClient, storeId: string, adId:
 const DM_SETTLE_MS = 8_000;
 /** Si una asesora abrió el hilo hace menos de 10 minutos, la IA no se mete. */
 const HUMAN_HOLD_MS = 10 * 60_000;
+/** «Responder pendientes con IA»: pausa entre envíos de cada uno de los tres turnos. */
+const BULK_PAUSE_MS = 2_000;
 
 /**
  * Lo automático de un aviso ya guardado en `threadId`. No hace nada si la
@@ -211,4 +213,67 @@ async function runTemplates(admin: SupabaseClient, ev: Exclude<NormalizedEvent, 
   const r = await sendSocial(admin, thread, { text: dmText, mode: "dm", userId: null, via: "auto", idempotencyKey: `auto:dm:${thread.id}` });
   if (r.ok) done.push("dm");
   return done;
+}
+
+export interface PendingAiResult {
+  respondidas: number;
+  omitidas: number;
+  /** Mensajes directos de más de 24 h: Meta solo deja escribir a una persona (la asesora, con «Sugerir con IA»). */
+  fueraDeVentana: number;
+  tomadas: number;
+  fallidas: number;
+}
+
+/**
+ * «Responder pendientes con IA» (owner, 25-11-2026: «¿no puedes responder todo
+ * lo pendiente?»): pasa la IA por lo que está en «Por responder» de las tiendas
+ * dadas. Comentario: público y privado (si aún se puede). Mensaje directo: solo
+ * dentro de las 24 h (después Meta exige una persona). No toca lo que una
+ * asesora abrió hace menos de 10 minutos. Las llaves son las de lo automático:
+ * nada sale dos veces.
+ */
+export async function answerPendingWithAi(admin: SupabaseClient, storeIds: string[]): Promise<PendingAiResult> {
+  const out: PendingAiResult = { respondidas: 0, omitidas: 0, fueraDeVentana: 0, tomadas: 0, fallidas: 0 };
+  if (!storeIds.length || !socialAiConfigured() || !zernioConfigured()) return out;
+  const { data } = await admin.from("social_threads").select("id,kind,last_inbound_at")
+    .in("store_id", storeIds).eq("status", "abierto").eq("last_direction", "in")
+    .order("last_message_at", { ascending: false }).limit(80);
+  const rows = (data as Array<{ id: string; kind: "dm" | "comment"; last_inbound_at: string | null }> | null) ?? [];
+  const phones = new Map<string, string | null>();
+  const queue = [...rows];
+  const worker = async () => {
+    for (let row = queue.shift(); row; row = queue.shift()) {
+      if (row.kind === "dm" && dmReplyMode(row.last_inbound_at) !== "libre") { out.fueraDeVentana++; continue; }
+      const thread = await loadThread(admin, row.id);
+      if (!thread?.store_id) { out.fallidas++; continue; }
+      const claimedAt = Date.parse(thread.claimed_at ?? "");
+      if (thread.claimed_by && Number.isFinite(claimedAt) && Date.now() - claimedAt < HUMAN_HOLD_MS) { out.tomadas++; continue; }
+      if (!phones.has(thread.store_id)) phones.set(thread.store_id, await storeWhatsappPhone(admin, thread.store_id));
+      const draft = await draftAiReply(admin, thread, phones.get(thread.store_id) ?? null);
+      if (draft === "sin_turno" || draft?.skip) { out.omitidas++; continue; }
+      if (!draft) { out.fallidas++; continue; }
+      const { data: lastIn } = await admin.from("social_messages").select("external_id,occurred_at").eq("thread_id", thread.id)
+        .eq("direction", "in").order("occurred_at", { ascending: false }).limit(1).maybeSingle();
+      const last = lastIn as { external_id: string | null; occurred_at: string } | null;
+      let sent = false;
+      if (thread.kind === "comment") {
+        if (draft.publicText) sent = (await sendSocial(admin, thread, { text: draft.publicText, mode: "public", userId: null, via: "auto", idempotencyKey: `ai:pub:${thread.external_id}` })).ok || sent;
+        // Los 7 días cuentan desde el comentario (no desde que Kapta lo trajo).
+        const { data: firstIn } = await admin.from("social_messages").select("occurred_at").eq("thread_id", thread.id)
+          .eq("direction", "in").order("occurred_at").limit(1).maybeSingle();
+        const commentAt = (firstIn as { occurred_at: string } | null)?.occurred_at ?? null;
+        if (draft.privateText && privateReplyAllowed({ kind: "comment", private_reply_at: thread.private_reply_at }, commentAt)) {
+          sent = (await sendSocial(admin, thread, { text: draft.privateText, mode: "private", userId: null, via: "auto", idempotencyKey: `ai:priv:${thread.external_id}` })).ok || sent;
+        }
+      } else if (draft.privateText) {
+        const key = `ai:dm:${last?.external_id ?? `${thread.id}:${last?.occurred_at ?? ""}`}`;
+        sent = (await sendSocial(admin, thread, { text: draft.privateText, mode: "dm", userId: null, via: "auto", idempotencyKey: key })).ok;
+      }
+      if (sent) out.respondidas++; else out.fallidas++;
+      // Sin ráfagas: una pausa entre envíos para no parecer spam ante Meta.
+      await new Promise((r) => setTimeout(r, BULK_PAUSE_MS));
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
+  return out;
 }

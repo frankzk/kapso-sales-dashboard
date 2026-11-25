@@ -119,3 +119,27 @@ describe("«Sugerir con IA» (borrador sin enviar)", () => {
     expect(read("docs/mom/master-pedidos-v1.md")).toContain("«Sugerir con IA»");
   });
 });
+
+describe("«Responder pendientes con IA»", () => {
+  const src = read("lib/social-auto-server.ts");
+  const fn = src.slice(src.indexOf("export async function answerPendingWithAi"));
+  it("los mensajes directos solo dentro de 24 h: después Meta exige una persona", () => {
+    expect(fn).toContain('dmReplyMode(row.last_inbound_at) !== "libre"');
+    expect(fn).not.toContain("humanAgent");
+  });
+  it("no toca lo que una asesora abrió y usa las mismas llaves que lo automático", () => {
+    expect(fn).toContain("HUMAN_HOLD_MS");
+    expect(fn).toContain("`ai:pub:${thread.external_id}`");
+    expect(fn).toContain("`ai:priv:${thread.external_id}`");
+  });
+  it("el privado cuenta los 7 días desde el comentario", () => {
+    expect(fn).toMatch(/privateReplyAllowed\(\{ kind: "comment", private_reply_at: thread.private_reply_at \}, commentAt\)/);
+  });
+  it("pide «Tiendas» y el MOM lo cuenta", () => {
+    const actions = read("app/dashboard/leads/redes/actions.ts");
+    const a = actions.slice(actions.indexOf("export async function answerPendingSocialWithAi"));
+    expect(a.slice(0, 600)).toContain('perms.can("stores.manage")');
+    expect(read("docs/mom/master-pedidos-v1.md")).toContain("«Responder pendientes con IA»");
+  });
+});
+

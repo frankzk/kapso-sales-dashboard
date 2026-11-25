@@ -16,6 +16,7 @@ import {
   setSocialAccountStore,
   setSocialThreadStatus,
   suggestSocialReply,
+  answerPendingSocialWithAi,
   syncZernioInbox,
   type SocialAutoSettingsView,
   type SocialMessageView,
@@ -142,6 +143,7 @@ export function SocialInbox({ threads, accounts, stores, canManage, configured, 
   const [autoOpen, setAutoOpen] = useState(false);
   const [syncing, startSync] = useTransition();
   const [syncNotice, setSyncNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  const [answering, startAnswer] = useTransition();
   const [now, setNow] = useState(() => Date.now());
 
   // Lo nuevo llega por el webhook: la lista se refresca sola cada 20 s, y la espera se recuenta.
@@ -180,6 +182,25 @@ export function SocialInbox({ threads, accounts, stores, canManage, configured, 
     startSync(async () => {
       const res = await syncZernioInbox();
       setSyncNotice(res.ok ? { ok: true, text: res.notice ?? "Sincronizado." } : { ok: false, text: res.error });
+      router.refresh();
+    });
+  }
+
+  function answerPending() {
+    if (!window.confirm(`La IA va a responder lo que está en «Por responder» (${counts.pendientes}): los comentarios en público y por privado, y los mensajes directos de las últimas 24 horas. Lo que una asesora abrió hace menos de 10 minutos no se toca. ¿Seguimos?`)) return;
+    setSyncNotice(null);
+    startAnswer(async () => {
+      const res = await answerPendingSocialWithAi();
+      if (!res.ok) { setSyncNotice({ ok: false, text: res.error }); return; }
+      const r = res.result;
+      const parts = [
+        `${r.respondidas} respondidas`,
+        r.fueraDeVentana ? `${r.fueraDeVentana} mensajes de más de 24 h quedan para las asesoras (Meta solo deja escribir a una persona: usa «Sugerir con IA» y envía)` : null,
+        r.omitidas ? `${r.omitidas} sin responder (solo emojis, etiquetas o spam)` : null,
+        r.tomadas ? `${r.tomadas} las está atendiendo una asesora` : null,
+        r.fallidas ? `${r.fallidas} no se pudieron enviar` : null,
+      ].filter(Boolean);
+      setSyncNotice({ ok: r.fallidas === 0, text: `IA: ${parts.join(" · ")}.` });
       router.refresh();
     });
   }
@@ -224,6 +245,12 @@ export function SocialInbox({ threads, accounts, stores, canManage, configured, 
               Respuestas automáticas
               <Badge tone={autoOn ? "ok" : "neutral"}>{autoOn ? `${autoOn} de ${autoSettings.length}` : "Apagadas"}</Badge>
             </OpsButton>
+            {configured && aiReady && counts.pendientes > 0 && (
+              <OpsButton onClick={answerPending} disabled={answering} title="La IA responde lo que está en «Por responder»">
+                <IconBot className={cn(answering && "motion-safe:animate-pulse")} />
+                {answering ? "Respondiendo…" : "Responder pendientes con IA"}
+              </OpsButton>
+            )}
             {configured && (
               <OpsButton onClick={sync} disabled={syncing} title="Trae de Zernio las cuentas, las últimas conversaciones y los últimos comentarios">
                 <IconRepeat className={cn(syncing && "motion-safe:animate-spin")} />
