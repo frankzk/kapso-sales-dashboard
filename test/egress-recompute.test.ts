@@ -67,6 +67,35 @@ describe("¿el snapshot cambia algo?", () => {
     expect(cambiosMateriales({ pickup_state: null }, fila)).toEqual([]);
     expect(SELLOS_DE_LECTURA).toEqual(["last_report_at", "api_report_at", "api_updated_at"]);
   });
+
+  // Medido el 25-11-2026: las 735 guías ENTREGADAS de la ventana del barrido se reescribían enteras y su
+  // pedido se recalculaba en cada pasada (247.723 veces en 10 días, unas 23.800 al día: cerca del 83 % de
+  // los recálculos del Master), y solo 3 de esos 735 pedidos habían cambiado en tres horas. El parche lleva
+  // `closed_at` con el formato de JavaScript (`…Z`) y la base lo devuelve con el suyo (`…+00:00`): el mismo
+  // instante, comparado como texto, salía distinto siempre.
+  it("un instante escrito de dos maneras es el mismo instante: una entregada no se reescribe en cada pasada", () => {
+    const entregada = {
+      ...fila,
+      delivery_status: "entregado",
+      status_category: "closed",
+      delivered_source: "aliclik_api",
+      closed_at: "2026-09-09T09:00:00+00:00",
+    };
+    const patch = { ...entregada, closed_at: "2026-09-09T09:00:00.000Z", api_report_at: "2026-09-10T10:00:00.000Z" };
+    expect(cambiosMateriales(patch, entregada)).toEqual([]);
+    // Con milisegundos y con otra zona horaria, igual.
+    expect(cambiosMateriales({ closed_at: "2026-09-09T09:00:00.123Z" }, { closed_at: "2026-09-09T09:00:00.123+00:00" })).toEqual([]);
+    expect(cambiosMateriales({ closed_at: "2026-09-09T09:00:00.000Z" }, { closed_at: "2026-09-09T04:00:00-05:00" })).toEqual([]);
+  });
+
+  it("otro instante sí es un cambio, y lo que no es una fecha y hora se sigue comparando como texto", () => {
+    expect(cambiosMateriales({ closed_at: "2026-09-09T09:00:01.000Z" }, { closed_at: "2026-09-09T09:00:00+00:00" })).toEqual(["closed_at"]);
+    expect(cambiosMateriales({ closed_at: "2026-09-09T09:00:00.000Z" }, { closed_at: null })).toEqual(["closed_at"]);
+    // Un día suelto no es un instante: no se interpreta.
+    expect(cambiosMateriales({ dia: "2026-09-09" }, { dia: "2026-09-09T00:00:00+00:00" })).toEqual(["dia"]);
+    // Una etiqueta que parece otra no se toca.
+    expect(cambiosMateriales({ reported_status: "DELIVERED" }, { reported_status: "delivered" })).toEqual(["reported_status"]);
+  });
 });
 
 describe("el aplicador no recalcula lo que no cambió", () => {
