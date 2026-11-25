@@ -50,12 +50,24 @@ export const DASHBOARD_SECTIONS = [
   "rutas",
   "stores",
   "team",
+  // Despacho del día y Grupo GF (25-11-2026): caía en `/dashboard/other`.
+  "courier",
 ] as const;
+
+/**
+ * Pantallas que se miden aparte de su sección (25-11-2026).
+ *
+ * Repro Lima vive en `/dashboard/pedidos/repro-lima` y se contaba como
+ * «pedidos»: la pantalla que el equipo reportaba lenta era la única que no se
+ * podía ver por separado. Rutas fijas, sin ids: la misma regla de arriba.
+ */
+export const DASHBOARD_SUBSECTIONS = ["pedidos/repro-lima"] as const;
 
 /** Rutas exactas que `parseClientPerformanceMetric` acepta en `from` y `to`. */
 export const DASHBOARD_ROUTES: readonly string[] = [
   "/dashboard",
   ...DASHBOARD_SECTIONS.map((s) => `/dashboard/${s}`),
+  ...DASHBOARD_SUBSECTIONS.map((s) => `/dashboard/${s}`),
   "/dashboard/other",
 ];
 

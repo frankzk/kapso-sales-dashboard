@@ -96,6 +96,7 @@ import {
   type ReproCourier,
   type ReproOutcome,
 } from "@/lib/repro-lima";
+import { dropReproLimaClaim, holdReproLimaClaim } from "@/lib/repro-lima-queue";
 
 // ---------------------------------------------------------------------------
 // Piezas que comparte el tablero (components/repro-lima-pending.tsx)
@@ -307,6 +308,11 @@ export interface ReproSaved {
   error: string | null;
   /** Otro courier: la salida se crea desde la Mesa de ruta de la ficha. */
   mesa: boolean;
+  /**
+   * Guardar ya trajo la pantalla de atrás: la acción revalida y la página
+   * vuelve en su misma respuesta. La ficha no la pide otra vez.
+   */
+  refreshed: boolean;
 }
 
 /**
@@ -597,6 +603,7 @@ export function ReproLimaPanel({
     const onPageHide = () => {
       if (session.shouldRelease || !session.caseId) return;
       session.shouldRelease = true;
+      dropReproLimaClaim(orderId);
       navigator.sendBeacon?.(
         "/api/repro-lima/release-claim",
         new Blob([JSON.stringify({ caseId: session.caseId })], { type: "application/json" }),
@@ -639,6 +646,9 @@ export function ReproLimaPanel({
         setCaseId(result.caseId);
         setClaimUntil(result.until);
         setClaimState("mine");
+        // Tomar ya no vuelve a pedir la pantalla: la fila del tablero dice
+        // «Lo atiendes tú» por este aviso, no por una lectura nueva.
+        holdReproLimaClaim(orderId);
         window.addEventListener("pagehide", onPageHide);
         window.addEventListener("pageshow", onPageShow);
         void reload();
@@ -647,6 +657,7 @@ export function ReproLimaPanel({
             .then((renewal) => {
               if (!active || session.shouldRelease) return;
               if ("error" in renewal) {
+                dropReproLimaClaim(orderId);
                 setClaimState("lost");
                 setClaimMessage(renewal.error);
                 if (heartbeat) clearInterval(heartbeat);
@@ -657,6 +668,7 @@ export function ReproLimaPanel({
             })
             .catch(() => {
               if (!active || session.shouldRelease) return;
+              dropReproLimaClaim(orderId);
               setClaimState("lost");
               setClaimMessage("No pudimos renovar el caso. Vuelve a tomarlo.");
               if (heartbeat) clearInterval(heartbeat);
@@ -676,6 +688,7 @@ export function ReproLimaPanel({
       window.removeEventListener("pagehide", onPageHide);
       window.removeEventListener("pageshow", onPageShow);
       if (heartbeat) clearInterval(heartbeat);
+      dropReproLimaClaim(orderId);
       // Salir de la pestaña, o desmontar la ficha sin «Cerrar» ni «Soltar»
       // (atrás del navegador, otro pedido), también suelta el caso (§9.5). Si
       // el efecto vuelve a correr («Volver a tomarlo», volver a la pestaña),
@@ -692,6 +705,7 @@ export function ReproLimaPanel({
     const session = claimSessionRef.current;
     if (!session || session.shouldRelease) return;
     session.shouldRelease = true;
+    dropReproLimaClaim(session.orderId);
     if (session.caseId) void releaseReproCase(session.caseId).catch(() => undefined);
   }
 
@@ -867,12 +881,15 @@ export function ReproLimaPanel({
         notice: result.notice ?? null,
         error: result.error ?? null,
         mesa: Boolean(result.href),
+        // `callId` solo vuelve cuando la acción ya revalidó la página (recordCall).
+        refreshed: Boolean(result.callId),
       }, advance);
       return;
     }
     if (result.claimLost) {
       // Ya no tiene el caso (D10): la hoja lo dice, conserva lo escrito y
       // ofrece «Volver a tomarlo».
+      dropReproLimaClaim(orderId);
       setClaimState("lost");
       setClaimMessage(result.error ?? null);
       return;

@@ -2883,11 +2883,11 @@ nada instalado, y Kapta solo hace salidas.
   repetido, ignorado o error, con los teléfonos enmascarados. Guarda 30 días y
   la ve solo quien administra, en Ajustes.
 - **El cron de Anura (`/api/cron/anura-recordings`, 06-11-2026).** Corre cada
-  10 minutos (minutos 1, 11, 21, 31, 41 y 51; todos los minutos de la hora ya
-  tienen algún cron, así que comparte minuto con la foto de los pedidos para
-  boletas, que corre en todos los minutos impares, y a los :11 con la regla
-  automática de la lista de pago adelantado; el :23 queda solo para la
-  renovación de las apps propias de Shopify) y hace, en todas las
+  10 minutos (minutos 1, 11, 21, 31, 41 y 51; a los :11 comparte minuto con
+  la regla automática de la lista de pago adelantado; hasta el 25-11-2026
+  también lo compartía con la foto de los pedidos para boletas, que corría en
+  todos los minutos impares y ahora va en los 2, 7, 12, …, 57) y hace, en
+  todas las
   organizaciones, lo que la ficha solo hace al abrirse:
   1. cierra las llamadas que Anura dejó colgadas, con las mismas reglas de
      arriba (pedida y sin avisos a los 60 s; sonando o en curso y sin fin a
@@ -6105,6 +6105,28 @@ la pestaña con el aviso. Guardar exige el candado vivo y el mismo episodio (`li
 **Solo vale dentro de Repro Lima**:
 Grupo GF sigue tomando, programando y asignando el pedido. «Ver acuerdo» y
 «Cerrados» se abren solo para leer, sin candado.
+
+**Cuándo se vuelve a leer la lista (owner, 25-11-2026: «Repro Lima carga
+demasiado lento»).** Medido el 24-11-2026: 1.056 lecturas enteras de la
+pantalla en un día, cada una con los 1.157 pedidos pendientes de Lima (2 a
+2,6 s con el sistema tranquilo, 5 a 8,7 s cuando coincidían varias personas),
+porque abrir una ficha, cerrarla y guardar la volvían a pedir, y guardar la
+pedía tres veces. Desde entonces:
+- **Tomar y soltar el caso no vuelven a pedir la lista.** La fila dice «Lo
+  atiendes tú» por lo que la ficha de esa pestaña tiene tomado, no por la
+  última lectura; «Diana lo atiende» sí viene de la última lectura. El candado
+  de la base sigue siendo quien impide atender dos a la vez: si la lista estaba
+  vieja y otra persona ya lo tiene (o lo cerró), «Atender» lo dice, abre la
+  hoja para leer y **ahí sí** relee la lista.
+- **Guardar la trae una sola vez**, en la misma respuesta del guardado: la
+  llamada de la hoja, «Programar» de la fila, «No se entregó» y la guía rápida.
+  La ficha y el tablero no la piden otra vez; «Guardar y pasar al siguiente»
+  tampoco al tomar el siguiente.
+- **Al volver a la pestaña** se relee si pasaron 20 segundos desde la última
+  lectura, venga de donde venga.
+- Los lotes («Aprobar elegidos», «Programar» elegidos) la releen al terminar.
+- No cambia ninguna regla: ni el candado, ni el episodio, ni qué se puede
+  atender. Solo cuándo se lee.
 
 **Cuatro listas: etiquetas de pantalla, no subetapas.** «Por decidir»,
 «Llamar después», «Programados» y «Cerrados» se derivan del caso, del Master y
@@ -9523,6 +9545,17 @@ la mitad de veces.
 - No cambia cuándo se recarga de verdad (`lib/leads-live-refresh.ts`: urgente
   si cambian «Atender ahora» o los Yapes, tranquila cada 2 minutos, forzada
   cada 5), ni el reparto, ni las alertas de Yape (cada 15 s), ni la reserva.
+  (La tranquila pasó a 5 minutos el 25-11-2026: el punto siguiente.)
+- **El tablero se recarga cada 5 minutos (25-11-2026, decisión del owner:
+  «acepto que el tablero se recargue cada 5 minutos en vez de cada 2»).** La
+  recarga tranquila pasa de 2 a 5 minutos (`QUIET_REFRESH_MS`). Medido del 14
+  al 25-11-2026: Leads se llevaba cerca del 47 % del tiempo de la base, y cada
+  recarga baja la cola entera de «Por llamar». Lo que no cambia: un «Atender
+  ahora» o un Yape por verificar nuevos recargan al momento, lo que hace la
+  propia asesora se ve al momento, y la cola se sigue revisando cada 60 s. Lo
+  que cambia: un lead nuevo por llamar, o uno que tomó otra asesora, aparece
+  en la lista en hasta 5 minutos (antes, hasta 2). El reparto no depende de la
+  lista: «Tomar» y el siguiente lead se deciden en la base al momento.
 - Se descartó calcular el reparto una sola vez para todas las asesoras: ahorra
   lo mismo (la mitad del reparto) con un cambio grande en `lead_routing_scope`
   y el mismo atraso. Prueba: `test/leads-live-poll.test.ts`.
@@ -23882,9 +23915,12 @@ tamaño del lote sale de lo que Shopify dice que pide cada pedido
 1000; 1 con un balde de 1000, por la reserva); si Shopify contesta que el lote
 pasa el tope (`MAX_COST_EXCEEDED`), se achica sin perder pedidos.
 
-**Qué pedidos.** El cron `/api/cron/invoice-snapshots`, **cada 2 minutos, en
-los minutos impares** (`1-59/2`: nunca arranca con el barrido de boletas de
-los minutos 6, 16, …), toma por tienda lo que la base dice que falta
+**Qué pedidos.** El cron `/api/cron/invoice-snapshots`, **cada 5 minutos, en
+los minutos 2, 7, 12, …, 57** (`2-57/5`: nunca arranca con el barrido de
+boletas de los minutos 6, 16, …, ni en el :23 de la renovación de las apps
+propias de Shopify, ni en el :48 de la copia de fotos de producto; hasta el
+25-11-2026 corría cada 2 minutos, en los impares, ver «Cada 5 minutos» abajo),
+toma por tienda lo que la base dice que falta
 (`invoice_snapshot_candidates`, hasta 600 por pasada). Entra un pedido:
 
 - de una tienda activa de una organización que factura en Kapta (con un RUC
@@ -23905,7 +23941,7 @@ nuevo al más viejo.
 
 **Sin quitarle Shopify a nadie.** Las dos tiendas a la vez (cada una tiene su
 propio cupo en Shopify), un lote a la vez por tienda, y ninguna llamada nueva
-pasados **95 s** (la ruta tiene 120 s y el cron vuelve a los 2 minutos). Antes
+pasados **95 s** (la ruta tiene 120 s y el cron vuelve a los 5 minutos). Antes
 de cada llamada espera a que la tienda tenga en Shopify el costo que pide el
 lote **más una reserva**: un cuarto del balde y **nunca menos que lo que pide
 la lectura de una boleta** (850 puntos; la consulta de la boleta pide unos
@@ -23931,11 +23967,23 @@ log lleva conteos y el ritmo: fotos de la pasada (`orders`), por minuto
 tamaño del lote (`batch`), los puntos que se pidieron y se gastaron
 (`points.requested`, `points.actual`), las fotos buenas conservadas (`kept`) y
 el cupo que informó Shopify (`quota`): ni pedidos, ni clientas, ni el token.
-Con `?dry=1` solo cuenta lo que falta. Con 95 s de trabajo cada 120 s, Kenku
-(9.171) termina en ~1,7 h con el balde del plan básico (2000 / 100 por s) y
-pedidos de ~40 puntos, y en ~9 h en el peor caso razonable (balde de 1000 / 50
-por s y 100 puntos por pedido); Aurela, a la vez, antes (DEPLOY.md, entrada
-del 23-10-2026).
+Con `?dry=1` solo cuenta lo que falta. Con 95 s de trabajo cada 120 s (la
+cadencia de la primera pasada, antes del cierre), Kenku (9.171) terminó en
+~1,7 h con el balde del plan básico (2000 / 100 por s) y pedidos de ~40
+puntos, y en ~9 h en el peor caso razonable (balde de 1000 / 50 por s y 100
+puntos por pedido); Aurela, a la vez, antes (DEPLOY.md, entrada del
+23-10-2026).
+
+**Cada 5 minutos (owner, 25-11-2026).** La primera pasada necesitaba ir casi
+sin pausa para terminar antes del cierre de Shopify. Ya terminó: medido el
+25-11-2026, hay 11.670 fotos, la última del 04-11-2026, y los 2.039 pedidos de
+los últimos 7 días son todos de WooCommerce (que nunca llevan foto, 35.11). El
+cron seguía preguntando a la base qué faltaba 720 veces al día por tienda. El
+owner: «los comprobantes pásalo de 2 a 5 minutos; a 10 todavía me parece
+mucho». Lo que cambia: un pedido de Shopify que cambie se vuelve a tomar hasta
+5 minutos después, y una cola grande se vaciaría 2,5 veces más lento (95 s de
+trabajo cada 300 s). El presupuesto de la pasada, la reserva del cupo y el
+turno por tienda no cambian.
 
 **Una falla no tapa la cola** (revisión del 23-10-2026). Lo que es de la tienda
 para la tienda hasta la próxima pasada: THROTTLED (sin rojo), la tienda que ya
@@ -24004,7 +24052,7 @@ Implementación:
   `SNAPSHOT_FALLBACK_FROM`.
 - `app/api/cron/invoice-snapshots/route.ts`: la ruta (`maxDuration` 120), con
   `CRON_SECRET`; fuera de producción no llama a Shopify, y sin la 0275 contesta
-  `sin_migracion`. En `vercel.json`, `1-59/2 * * * *`.
+  `sin_migracion`. En `vercel.json`, `2-57/5 * * * *`.
 - `lib/invoicing/shopify-order.ts`: `requestOrderForInvoice` (la misma llamada
   para la boleta y para la foto) y la lectura de la foto en
   `fetchOrderForInvoice`; `lib/invoicing/server.ts` pone `foto_shopify` en la

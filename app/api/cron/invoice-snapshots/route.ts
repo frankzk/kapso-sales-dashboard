@@ -1,8 +1,8 @@
 // La foto de los pedidos de Shopify para sus boletas (MOM §35.10, owner
 // 23-10-2026).
 //
-// Shopify cierra Kenku Perú y Aurela el 28-10-2026. Cada 2 minutos (en los
-// minutos impares, `1-59/2` en vercel.json), mientras
+// Shopify cierra Kenku Perú y Aurela el 28-10-2026. Cada 5 minutos (minutos
+// 2, 7, …, 57: `2-57/5` en vercel.json; hasta el 25-11-2026, cada 2), mientras
 // Shopify responde, guarda lo que la boleta leería de cada pedido que todavía
 // puede necesitarla (lib/invoicing/snapshots.ts), para emitirla desde esa foto
 // cuando Shopify ya no conteste. Cada pasada trabaja hasta 95 s

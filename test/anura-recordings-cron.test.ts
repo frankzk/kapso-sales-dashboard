@@ -448,7 +448,7 @@ describe("vercel.json: el cron de Anura", () => {
     expect(new Set(gaps)).toEqual(new Set([10]));
   });
 
-  it("solo comparte minuto con el de los minutos impares y, a los :11, con prepay-list (nunca el :23 de shopify-own-app-tokens)", () => {
+  it("solo comparte minuto, a los :11, con prepay-list (nunca el :23 de shopify-own-app-tokens)", () => {
     const minutesOf = (schedule: string): number[] => {
       const [minute, hour] = schedule.split(" ");
       if (hour !== "*" && !hour!.startsWith("*/")) return [];
@@ -462,12 +462,12 @@ describe("vercel.json: el cron de Anura", () => {
       }
       return out;
     };
-    // invoice-snapshots corre en TODOS los minutos impares y no queda ningún
-    // minuto libre: ninguna cadencia de 10 minutos evita coincidir con algo.
-    expect(crons.find((c) => c.path === "/api/cron/invoice-snapshots")?.schedule).toBe("1-59/2 * * * *");
+    // invoice-snapshots corría en TODOS los minutos impares; desde el 25-11-2026
+    // va cada 5 minutos (2, 7, …, 57) y ya no comparte ninguno con este.
+    expect(crons.find((c) => c.path === "/api/cron/invoice-snapshots")?.schedule).toBe("2-57/5 * * * *");
     const mine = minutesOf("1,11,21,31,41,51 * * * *");
     expect(mine).not.toContain(23);
-    for (const c of crons.filter((x) => x.path !== "/api/cron/anura-recordings" && x.path !== "/api/cron/invoice-snapshots")) {
+    for (const c of crons.filter((x) => x.path !== "/api/cron/anura-recordings")) {
       const theirs = minutesOf(c.schedule);
       expect(mine.filter((m) => theirs.includes(m)), c.path).toEqual(c.path === "/api/cron/prepay-list" ? [11] : []);
     }

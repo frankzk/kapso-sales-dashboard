@@ -85,6 +85,27 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 25-11-2026 · Carga del sistema: Repro Lima recarga una vez, Aliclik no reescribe entregadas y se mide cada pantalla (sin migración, MOM §9.5 y §35.10)
+
+Sin migración ni variables. Sale de `docs/plan/rendimiento-carga.md` (fase 0 y tres cambios de la fase 1) y de dos
+decisiones del owner del mismo día.
+
+- **Repro Lima.** Abrir y cerrar una ficha ya no vuelven a leer la pantalla; guardar la lee una vez (antes tres).
+  «Lo atiendes tú» lo marca la ficha de esa pestaña.
+- **Aliclik.** Una guía entregada ya no se reescribe ni recalcula su pedido en cada barrido (eran unas 23.800
+  veces al día). La fecha de cierre no cambia.
+- **Leads.** El tablero se recarga cada 5 minutos en vez de cada 2. «Atender ahora» y los Yapes siguen al momento.
+- **Foto de pedidos para boletas.** El cron pasa de cada 2 minutos a cada 5 (`2-57/5 * * * *` en `vercel.json`).
+- **Medición.** Leads, Master, Courier y Envíos dejan en los logs una línea por carga, como Repro Lima:
+  `[leads] carga {…}`, `[pedidos] carga {…}`, `[courier] carga {…}`, `[envios] carga {…}`. Solo tiempos y conteos.
+
+Verificar, en Vercel → Logs:
+1. Buscar `carga {`: aparecen las cinco pantallas con su `totalMs`.
+2. En Repro Lima, «Atender» y cerrar sin guardar: no aparece ninguna línea `[repro-lima] carga` nueva. Al guardar
+   una llamada aparece una sola.
+3. Al día siguiente, las líneas `[repro-lima] carga` de un día deberían ser bastante menos que las 1.056 del 24-11.
+4. `/api/cron/invoice-snapshots` corre en los minutos 2, 7, 12, …
+
 ### 25-11-2026 · Leads → Redes: comentarios y mensajes de Facebook e Instagram por Zernio, con reparto y respuestas automáticas (0354, MOM §25.4)
 
 **Migración `0354_social_inbox.sql`: aplicar en producción ANTES del código.** Crea `social_accounts`,
