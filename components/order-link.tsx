@@ -17,6 +17,7 @@
 import { useCallback, type MouseEvent, type ReactNode } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { orderDrawerHref, type OrderDrawerSection } from "@/lib/order-drawer-href";
+import { clearReproLimaAdvance } from "@/lib/repro-lima-queue";
 
 function isPlainLeftClick(event: MouseEvent): boolean {
   return event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
@@ -37,6 +38,8 @@ export function useOpenOrderDrawer(): (orderId: string, section?: OrderDrawerSec
   const hrefOf = useOrderDrawerHref();
   return useCallback(
     (orderId: string, section?: OrderDrawerSection | null) => {
+      // Quien abre un pedido a mano manda: la guarda del paso al siguiente se suelta.
+      clearReproLimaAdvance();
       window.history.pushState(null, "", hrefOf(orderId, section));
     },
     [hrefOf],
@@ -66,6 +69,7 @@ export function OrderLink({
   const onClick = (event: MouseEvent<HTMLAnchorElement>) => {
     if (!isPlainLeftClick(event)) return;
     event.preventDefault();
+    clearReproLimaAdvance();
     window.history.pushState(null, "", href);
   };
   return (

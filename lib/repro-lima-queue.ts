@@ -80,6 +80,114 @@ export function clearReproLimaHandoff(orderId: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// El paso al siguiente: la ficha se queda en el siguiente aunque la URL regrese
+//
+// POR QUÉ (la usuaria principal, 24 y 25-11-2026: «me devuelve al mismo», «aún se
+// queda en el mismo pedido», con video). Después de «Guardar y pasar al
+// siguiente» el navegador terminaba de aplicar lo que venía del guardado y
+// volvía a poner en la barra el pedido ya guardado: la ficha lo reabría, en
+// «Operar». La comprobación única a 1,5 s (24-11) no alcanzaba: en el video la
+// URL regresa 4,5 s después. Ahora la ficha anota «de este pedido pasé a este
+// otro» y quien la monta (`OrderDrawerHost`) sigue enseñando el siguiente
+// mientras la URL diga el guardado, y la corrige en el acto.
+//
+// La guarda se acaba sola (`REPRO_ADVANCE_GUARD_MS`) y se suelta cuando la
+// persona decide otra cosa: abrir un pedido, cerrar la ficha o ir atrás.
+// ---------------------------------------------------------------------------
+
+export interface ReproLimaAdvance {
+  /** El pedido que se guardó. */
+  from: string;
+  /** El siguiente, el que la ficha tiene que enseñar. */
+  to: string;
+  at: number;
+}
+
+/** Cuánto dura la guarda contra una URL que regresa al pedido guardado. */
+export const REPRO_ADVANCE_GUARD_MS = 30_000;
+/**
+ * Cuánto se espera para pedir la lista de fondo. Lejos del cambio de URL (pedirla
+ * en el mismo instante hace que el navegador recargue la página entera) y con la
+ * ficha siguiente ya abierta.
+ */
+export const REPRO_ADVANCE_REFRESH_MS = 2_500;
+/**
+ * Cuánto se espera para confirmarle al navegador la URL del siguiente. El cambio
+ * de URL ocurre mientras el guardado todavía no termina de aplicarse, y ahí el
+ * router de Next no se la queda: sigue creyendo que la página es la del pedido
+ * guardado, y la siguiente lectura (la de fondo, o cualquier otra) la repone.
+ * Repetida con el guardado ya asentado, sí la aprende. Comprobado en un
+ * navegador real (25-11-2026): sin esto, la lectura de fondo pedía la página
+ * del pedido guardado y la URL regresaba al llegar; con esto, pide la del
+ * siguiente y no regresa.
+ */
+export const REPRO_ADVANCE_CONFIRM_MS = 600;
+
+let advance: ReproLimaAdvance | null = null;
+/** Desde cuándo se debe una lectura de la lista (el guardado no la trajo), o `null`. */
+let refreshOwedAt: number | null = null;
+const advanceListeners = new Set<() => void>();
+function notifyAdvance() {
+  for (const listener of advanceListeners) listener();
+}
+
+/**
+ * «Guardar y pasar al siguiente»: de `from` se pasó a `to`. Con `needsRefresh`
+ * (el guardado no trajo la lista) queda debiendo una lectura de fondo; un paso
+ * nuevo antes de pagarla vuelve a contar la espera desde ahí.
+ */
+export function advanceReproLima(from: string, to: string, needsRefresh: boolean, now: number = Date.now()): void {
+  if (needsRefresh) refreshOwedAt = now;
+  advance = { from, to, at: now };
+  notifyAdvance();
+}
+
+export function reproLimaAdvance(): ReproLimaAdvance | null {
+  return advance;
+}
+
+export function subscribeReproLimaAdvance(listener: () => void): () => void {
+  advanceListeners.add(listener);
+  return () => {
+    advanceListeners.delete(listener);
+  };
+}
+
+/**
+ * La persona decidió otra cosa (abrió un pedido, cerró la ficha, fue atrás): la
+ * guarda se suelta. La lectura de fondo que se deba se sigue debiendo.
+ */
+export function clearReproLimaAdvance(): void {
+  if (!advance) return;
+  advance = null;
+  notifyAdvance();
+}
+
+/** Desde cuándo se debe la lectura de fondo de la lista, o `null` si no se debe. */
+export function reproLimaRefreshOwed(): number | null {
+  return refreshOwedAt;
+}
+
+/** La lectura de fondo ya se pidió. La guarda sigue. */
+export function reproLimaRefreshPaid(): void {
+  if (refreshOwedAt === null) return;
+  refreshOwedAt = null;
+  notifyAdvance();
+}
+
+/**
+ * El pedido que la ficha tiene que enseñar en vez del que dice la URL, o `null`
+ * si manda la URL. Solo cuando la URL dice justo el pedido que se acaba de
+ * guardar y la guarda sigue viva.
+ */
+export function reproAdvancePin(current: ReproLimaAdvance | null, urlOrderId: string | null | undefined, now: number): string | null {
+  if (!current || !urlOrderId) return null;
+  if (urlOrderId !== current.from || current.to === current.from) return null;
+  if (now - current.at >= REPRO_ADVANCE_GUARD_MS || now < current.at) return null;
+  return current.to;
+}
+
+// ---------------------------------------------------------------------------
 // El caso que ESTA pestaña tiene tomado
 //
 // Tomar y soltar un caso ya no vuelve a pedir la pantalla (owner, 25-11-2026:
