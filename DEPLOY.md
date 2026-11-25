@@ -85,6 +85,42 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 25-11-2026 · Leads: la cola de «Por llamar» se lee en tramos a la vez (sin migración, MOM «La cola de Leads se revisa cada 60 s»)
+
+Sin migración, variables ni crons. Solo cambia cómo lee el servidor; la asesora ve la misma lista en el mismo orden.
+
+Por qué: medido el 25-11-2026, abrir o recargar Leads tardaba de 2,9 a 9,8 s y el 90 % era leer la lista (12.513
+leads en 13 viajes a la base, uno detrás de otro). Ahora son 16 tramos de ids, de a 8 a la vez, y la lectura empieza
+sin esperar la respuesta del reparto. A la base le cuesta menos que antes: medido igual en las dos formas, 10 ms y
+unos 950 bloques por tramo, contra 21 ms y 7.700 bloques por página de mil.
+
+Verificar, en Vercel → Logs, buscando `[leads] carga`:
+1. `lista` debería bajar: antes era cerca del 90 % de una carga de 2,9 a 9,8 s. Aparece un tiempo nuevo,
+   `productos`: lo que tarda en reconocer el producto de cada lead (antes iba sumado a `lista`).
+2. `filas` es el mismo número que el contador de «Por llamar» de la pantalla.
+3. En la pantalla: la lista, sus filtros y sus conteos son los mismos que antes del despliegue.
+
+Marcha atrás: revertir el commit. No toca datos.
+
+### 25-11-2026 · Repro Lima: cada lectura hace la cuarta parte de las consultas (sin migración, MOM §9.5)
+
+Sin migración, variables ni crons. Solo cambia cómo lee el servidor; la pantalla muestra lo mismo.
+
+Por qué: medido el 25-11-2026, cada lectura de Repro Lima hacía unas 260 consultas pequeñas (cada tabla de a 100
+pedidos, con 1.184 pendientes de Lima) y tardaba de 2,3 a 3,6 s. Ahora cada tabla se lee de a 400 pedidos, los
+pedidos de la etapa no esperan sus páginas en fila y las lecturas de Grupo GF que no dependían entre sí van juntas.
+Cada tanda pide el conteo exacto: si el servidor corta una respuesta, la tanda se parte y se relee, nunca queda una
+lista a medias.
+
+Verificar, en Vercel → Logs, buscando `[repro-lima] carga`:
+1. `totalMs` debería bajar frente a los 2.300–3.600 ms de antes. Mirar también `casos` y `pendientes`.
+2. No aparece el error «Una lectura por lotes trajo más filas de las que caben en una respuesta para un solo id».
+   Si aparece, esa lectura necesita ir paginada: avisar.
+3. En la pantalla, los conteos de «Por decidir», «Llamar después», «Programados» y la cola de pendientes son los
+   mismos que antes del despliegue.
+
+Marcha atrás: revertir el commit. No toca datos.
+
 ### 25-11-2026 · Se apaga la foto de pedidos de Shopify para boletas (sin migración, MOM §35.10)
 
 Sin migración ni variables. **Se quita un cron** de `vercel.json`: `/api/cron/invoice-snapshots` ya no corre solo.

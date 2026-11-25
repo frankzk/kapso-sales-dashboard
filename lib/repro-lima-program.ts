@@ -26,7 +26,7 @@
 //   RPC (E30): la recepción ya está hecha y es lo que importa.
 
 import type { createAdminSupabase } from "@/lib/db";
-import { courierRowsByIds } from "@/lib/courier-flow";
+import { courierRowsByIds, courierRowsByIdsWide } from "@/lib/courier-flow";
 import { loadActiveBoxes, type CourierRouteAssignment } from "@/lib/gf-active-boxes";
 import {
   clearGfDispatchPrograms,
@@ -204,6 +204,9 @@ export interface ReproProviderRow {
 }
 
 /** Los kinds del historial que hacen falta: recepción, reemplazo y programa quitado. */
+/** El conteo exacto de filas de una lectura por lotes anchos: con él se nota si el servidor cortó la respuesta. */
+const EXACT = { count: "exact" } as const;
+
 const FACT_EVENT_KINDS = [
   "returned_to_office",
   "return_received",
@@ -387,26 +390,29 @@ export async function loadReproFacts(
   if (!ids.length) return out;
   const idSet = new Set(ids);
   // Las columnas van en constantes: el tipo de la fila se dice aquí.
-  const byIds = async <T>(read: (chunk: string[]) => PromiseLike<{ data: unknown; error: { message: string } | null }>): Promise<T[]> =>
-    (await courierRowsByIds(ids, read as (chunk: string[]) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>)).data;
+  // Lotes anchos (400 ids, 25-11-2026): con 758 pedidos eran 8 lotes por tabla en
+  // siete tablas. Cada lectura pide el conteo exacto (`EXACT`): si el servidor
+  // corta la respuesta, el lote se parte y se relee (`courierRowsByIdsWide`).
+  const byIds = async <T>(read: (chunk: string[]) => PromiseLike<{ data: unknown; error: { message: string } | null; count?: number | null }>): Promise<T[]> =>
+    (await courierRowsByIdsWide(ids, read as (chunk: string[]) => PromiseLike<{ data: T[] | null; error: { message: string } | null; count?: number | null }>)).data;
 
   const [orderRows, orderBase, shipments, stops, programs, events, cases, requests] = await Promise.all([
     opts.orders
       ? Promise.resolve(opts.orders.filter((row) => idSet.has(row.order_id)))
-      : byIds<ReproOrderRow>((chunk) => admin.from("order_master").select(REPRO_ORDER_COLUMNS).in("order_id", chunk)),
+      : byIds<ReproOrderRow>((chunk) => admin.from("order_master").select(REPRO_ORDER_COLUMNS, EXACT).in("order_id", chunk)),
     byIds<{ id: string; store_id: string | null; cancelled_at: string | null }>((chunk) =>
-      admin.from("orders").select("id,store_id,cancelled_at").in("id", chunk)),
-    byIds<ReproShipmentRow>((chunk) => admin.from("shipments").select(SHIPMENT_COLUMNS).in("order_id", chunk)),
+      admin.from("orders").select("id,store_id,cancelled_at", EXACT).in("id", chunk)),
+    byIds<ReproShipmentRow>((chunk) => admin.from("shipments").select(SHIPMENT_COLUMNS, EXACT).in("order_id", chunk)),
     byIds<Omit<ReproStopRow, "routeDate" | "riderName">>((chunk) =>
-      admin.from("delivery_stops").select(STOP_COLUMNS).in("order_id", chunk).eq("status", "no_entregado")),
+      admin.from("delivery_stops").select(STOP_COLUMNS, EXACT).in("order_id", chunk).eq("status", "no_entregado")),
     byIds<GfProgramRow>((chunk) =>
-      admin.from("gf_dispatch_programs").select("order_id,store_id,scheduled_for,reason,set_at").in("order_id", chunk)),
+      admin.from("gf_dispatch_programs").select("order_id,store_id,scheduled_for,reason,set_at", EXACT).in("order_id", chunk)),
     byIds<{ order_id: string; shipment_id: string | null; kind: string; occurred_at: string }>((chunk) =>
-      admin.from("order_events").select("order_id,shipment_id,kind,occurred_at").in("order_id", chunk).in("kind", FACT_EVENT_KINDS)),
-    byIds<ReproCaseRow>((chunk) => admin.from("lima_repro_cases").select(REPRO_CASE_COLUMNS).in("order_id", chunk)),
+      admin.from("order_events").select("order_id,shipment_id,kind,occurred_at", EXACT).in("order_id", chunk).in("kind", FACT_EVENT_KINDS)),
+    byIds<ReproCaseRow>((chunk) => admin.from("lima_repro_cases").select(REPRO_CASE_COLUMNS, EXACT).in("order_id", chunk)),
     byIds<GfRequestRow & { order_id: string; provider_id: string; status: string; created_at: string | null }>((chunk) =>
       admin.from("logistics_requests")
-        .select("id,order_id,provider_id,shipment_id,scheduled_for,status,created_at")
+        .select("id,order_id,provider_id,shipment_id,scheduled_for,status,created_at", EXACT)
         .in("order_id", chunk)
         .neq("status", "cancelled")),
   ]);
@@ -482,8 +488,8 @@ export async function loadReproFacts(
 
   const [{ routeById, riderName }, { data: urpiRows }, [ownBoxes, { data: ownRequests }]] = await Promise.all([
     (async () => {
-      const { data: routes } = await courierRowsByIds(routeIds, (chunk) =>
-        admin.from("delivery_routes").select("id,route_date,rider_id").in("id", chunk));
+      const { data: routes } = await courierRowsByIdsWide(routeIds, (chunk) =>
+        admin.from("delivery_routes").select("id,route_date,rider_id", EXACT).in("id", chunk));
       const routeById = new Map((routes as Array<{ id: string; route_date: string; rider_id: string | null }>).map((route) => [route.id, route]));
       const riderIds = [...new Set([...routeById.values()].map((route) => route.rider_id).filter((id): id is string => Boolean(id)))];
       const { data: riders } = await courierRowsByIds(riderIds, (chunk) => admin.from("riders").select("id,full_name").in("id", chunk));

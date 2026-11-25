@@ -270,7 +270,7 @@ export async function cancelGfGuideFor(
   if (!storeId) return { ok: false, error: "No se pudo leer el pedido." };
   const store = await loadGfStore(admin, storeId);
   if (!store?.token) return { ok: false, error: "La tienda no tiene token de GF Courier." };
-  // Con motorizado no se anula desde Kapta (owner, 17-11-2026): asignado en una carga, esperando salir o ya en la calle.
+  // Solo en reparto con el motorizado no se anula desde Kapta (owner, 25-11-2026). Asignada pero sin salir, GF la retira de la carga.
   const before = await gfCourier.getOrder({ apiToken: store.token }, trackingId);
   if (before.ok) {
     const blocked = gfCancelBlockedByRider(before.data);

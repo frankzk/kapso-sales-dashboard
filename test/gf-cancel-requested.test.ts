@@ -62,12 +62,17 @@ describe("caminos que dependen de la anulación", () => {
   });
 });
 
-describe("con motorizado no se anula desde Kapta (owner 17-11-2026)", () => {
+// Owner, 25-11-2026: «la única limitante que deberíamos de poner es si la guía ya está en reparto con el motorizado».
+describe("solo en reparto con el motorizado no se anula desde Kapta (owner 25-11-2026)", () => {
   const order = (code: string, stage: string | null = null) => ({ status: { code, sub_status: null, final: false } as any, stage: stage ? { code: stage, rider_name: "Alexis" } : null });
-  it("bloquea si está asignado, esperando al motorizado o en la calle", () => {
-    expect(gfCancelBlockedByRider(order("READY_FOR_PICKUP", "AWAITING_OFFICE_CHECK"))).toContain("Alexis");
-    expect(gfCancelBlockedByRider(order("READY_FOR_PICKUP", "AWAITING_RIDER"))).toContain("no se anula desde Kapta");
-    expect(gfCancelBlockedByRider(order("OUT_FOR_DELIVERY"))).toContain("ya salió");
+  it("bloquea si la caja ya está en la calle", () => {
+    expect(gfCancelBlockedByRider(order("OUT_FOR_DELIVERY"))).toContain("ya está en reparto con un motorizado");
+    expect(gfCancelBlockedByRider(order("REFUSED"))).toContain("no se anula desde Kapta");
+    expect(gfCancelBlockedByRider(order("RETURNING"))).toContain("en reparto");
+  });
+  it("asignada a un motorizado pero sin salir: se anula (GF la retira sola de la carga)", () => {
+    expect(gfCancelBlockedByRider(order("READY_FOR_PICKUP", "AWAITING_OFFICE_CHECK"))).toBeNull();
+    expect(gfCancelBlockedByRider(order("READY_FOR_PICKUP", "AWAITING_RIDER"))).toBeNull();
   });
   it("deja anular lo que no tiene motorizado", () => {
     expect(gfCancelBlockedByRider(order("READY_FOR_PICKUP", "AWAITING_ASSIGNMENT"))).toBeNull();
@@ -75,10 +80,11 @@ describe("con motorizado no se anula desde Kapta (owner 17-11-2026)", () => {
   });
   it("novedad con la caja de vuelta en el almacén de GF: se anula (owner 24-11-2026, #KP206970)", () => {
     expect(gfCancelBlockedByRider(order("INCIDENT", "BACK_IN_WAREHOUSE"))).toBeNull();
+    // De vuelta y asignada a una carga nueva que todavía no sale: también.
+    expect(gfCancelBlockedByRider(order("INCIDENT", "AWAITING_RIDER"))).toBeNull();
     // Sin la etapa (GF anterior, o la caja sigue con el motorizado), como antes.
-    expect(gfCancelBlockedByRider(order("INCIDENT"))).toContain("ya salió");
-    expect(gfCancelBlockedByRider(order("INCIDENT", "AWAITING_RIDER"))).toContain("Alexis");
-    expect(gfCancelBlockedByRider(order("OUT_FOR_DELIVERY", "BACK_IN_WAREHOUSE"))).toContain("ya salió");
+    expect(gfCancelBlockedByRider(order("INCIDENT"))).toContain("en reparto");
+    expect(gfCancelBlockedByRider(order("OUT_FOR_DELIVERY", "BACK_IN_WAREHOUSE"))).toContain("en reparto");
   });
 });
 
