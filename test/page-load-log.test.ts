@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { pageLoadTimer } from "@/lib/page-load-log";
+import { pageLoadTimer, stageClock, stageTimed } from "@/lib/page-load-log";
 import { panelPrefetchOrder, sanitizeDashboardPath } from "@/lib/client-performance";
 import { DASHBOARD_ROUTES, DASHBOARD_SECTIONS, DASHBOARD_SUBSECTIONS, parseClientPerformanceMetric } from "@/lib/performance-metrics";
 
@@ -129,5 +129,55 @@ describe("el navegador mide Repro Lima y Courier por separado", () => {
   it("Repro Lima precarga lo mismo que «pedidos»: medir aparte no cambia lo que se pide", () => {
     expect(panelPrefetchOrder("/dashboard/pedidos/repro-lima?ficha=x", false)).toEqual(panelPrefetchOrder("/dashboard/pedidos", false));
     expect(panelPrefetchOrder("/dashboard/pedidos/repro-lima", true)).toEqual(panelPrefetchOrder("/dashboard/pedidos", true));
+  });
+});
+
+// Owner, 25-11-2026: «que Repro Lima quede con carga rápida». Con los lotes anchos bajó de 2,3–3,6 s a
+// 1,6–2,3 s, menos de lo estimado: `casos` y `pendientes` solos no dicen cuál de sus esperas en fila pesa.
+describe("las etapas en fila de una lectura", () => {
+  it("cada marca anota lo que pasó desde la anterior", () => {
+    let clock = 1_000;
+    const times: Record<string, number> = {};
+    const mark = stageClock(times, () => clock);
+    clock += 120;
+    mark("c.etapa");
+    clock += 900;
+    mark("c.hechos");
+    mark("c.llamadas");
+    expect(times).toEqual({ "c.etapa": 120, "c.hechos": 900, "c.llamadas": 0 });
+  });
+
+  it("sin dónde anotar no hace nada: las demás lecturas no miden", async () => {
+    const mark = stageClock(undefined);
+    expect(() => mark("c.etapa")).not.toThrow();
+    expect(await stageTimed(undefined, "p.gf", Promise.resolve(7))).toBe(7);
+    await expect(stageTimed(undefined, "p.gf", Promise.reject(new Error("caído")))).rejects.toThrow("caído");
+  });
+
+  it("una lectura que va a la vez que otras deja su propio tiempo, también si falla", async () => {
+    let clock = 0;
+    const times: Record<string, number> = {};
+    let finish: (value: string) => void = () => undefined;
+    const pending = stageTimed(times, "p.gestion", new Promise<string>((resolve) => { finish = resolve; }), () => clock);
+    clock = 340;
+    finish("ok");
+    expect(await pending).toBe("ok");
+    expect(times).toEqual({ "p.gestion": 340 });
+    await expect(stageTimed(times, "p.gf", Promise.reject(new Error("caído")), () => clock)).rejects.toThrow("caído");
+    expect(times["p.gf"]).toBe(0);
+  });
+
+  it("Repro Lima pasa su medición a las dos lecturas, y cada una marca sus esperas", () => {
+    const page = read("app/dashboard/pedidos/repro-lima/page.tsx");
+    expect(page).toContain('timed(times, "casos", loadReproLima(createAdminSupabase(), scope, new Date(), { attention: true, times })),');
+    expect(page).toContain('timed(times, "pendientes", loadLimaPending(createAdminSupabase(), scope, new Date(), times)),');
+    // La línea es la misma: los tiempos nuevos entran por `times`.
+    expect(page).toContain("console.info(`[repro-lima] carga ${JSON.stringify({ totalMs: Date.now() - started, ...times })}`);");
+    const marks = (path: string) => [...read(path).matchAll(/(?:mark|stageTimed)\((?:times, )?"([cp]\.[a-zA-Z.]+)"/g)].map((m) => m[1]);
+    expect(marks("lib/repro-lima-access.ts")).toEqual(["c.etapa", "c.filtro", "c.hechos", "c.llamadas"]);
+    expect(marks("lib/repro-lima-program.ts")).toEqual(["c.hechos.tablas", "c.hechos.rutas", "c.hechos.armado"]);
+    expect(marks("lib/repro-lima-pending-access.ts")).toEqual(["p.gf.salidas", "p.gf.detalle", "p.gf.cajas", "p.etapa", "p.gf", "p.courier", "p.gestion", "p.lecturas", "p.gfDias"]);
+    // Solo la pantalla mide: los hechos de un solo pedido no reciben `times`.
+    expect(read("lib/repro-lima-program.ts")).toContain("const mark = stageClock(opts.times);");
   });
 });

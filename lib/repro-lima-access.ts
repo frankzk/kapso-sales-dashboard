@@ -17,6 +17,7 @@
 import { after } from "next/server";
 import { redirect } from "next/navigation";
 import type { createAdminSupabase } from "@/lib/db";
+import { stageClock } from "@/lib/page-load-log";
 import { getAccessibleStores, getCurrentUser } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { resolveAgentNames } from "@/lib/agent-names";
@@ -501,8 +502,10 @@ export async function loadReproLima(
   admin: Admin,
   scope: ReproScope,
   now: Date = new Date(),
-  opts: { orderIds?: readonly string[]; attention?: boolean; defer?: (task: () => Promise<void>) => void; closeStale?: boolean } = {},
+  opts: { orderIds?: readonly string[]; attention?: boolean; defer?: (task: () => Promise<void>) => void; closeStale?: boolean; times?: Record<string, number> } = {},
 ): Promise<ReproLimaData> {
+  // Con `times` (la pantalla) cada espera en fila deja su tiempo: `c.etapa`, `c.hechos`, `c.llamadas`.
+  const mark = stageClock(opts.times);
   const clock = limaClock(now);
   const today = clock.day;
   const storeIds = [...scope.storeIds];
@@ -537,6 +540,7 @@ export async function loadReproLima(
     courierRowsByIds(storeIds, (chunk) => admin.from("stores").select("id,name,org_id,gf_courier_enabled").in("id", chunk)),
     admin.from("logistics_providers").select("id,org_id,status,same_day_cutoff").eq("code", "grupo-gf-courier"),
   ]);
+  mark("c.etapa");
   const stores = (storeRows as Array<{ id: string; name: string; org_id: string; gf_courier_enabled?: boolean | null }>)
     .sort((a, b) => a.name.localeCompare(b.name, "es"));
   const storeName = new Map(stores.map((store) => [store.id, store.name]));
@@ -560,7 +564,9 @@ export async function loadReproLima(
   const outOfStage = openCases.filter((row) => !inStage.has(row.order_id) && (opts.attention || !row.episode_key?.startsWith("attention:")));
 
   // Oleadas 2 y 3: los hechos de cada pedido.
-  const facts = await loadReproFacts(admin, rows.map((row) => row.order_id), { orders: rows, storeOrg, providers, gfCourierStores });
+  mark("c.filtro");
+  const facts = await loadReproFacts(admin, rows.map((row) => row.order_id), { orders: rows, storeOrg, providers, gfCourierStores, times: opts.times });
+  mark("c.hechos");
 
   // Casos de otro episodio, más reciente: se cierran como nuevo intento.
   const newAttempt: string[] = [];
@@ -588,6 +594,7 @@ export async function loadReproLima(
     .order("id")
     .range(from, to) as unknown as PromiseLike<{ data: Array<{ case_id: string; actor: string | null; occurred_at: string; outcome: string | null; channel: string | null; note?: string | null }> | null; error: { message: string } | null }>)
     .then((data) => ({ data, error: null })), COURIER_ROWS_WIDE_BATCH);
+  mark("c.llamadas");
   const lastCallByCase = new Map<string, { at: string; actor: string | null; outcome: string | null; note: string | null }>();
   for (const call of callRows as Array<{ case_id: string; actor: string | null; occurred_at: string; outcome: string | null; channel: string | null; note?: string | null }>) {
     // «Desarmar y cerrar sin llamada» no es una llamada.

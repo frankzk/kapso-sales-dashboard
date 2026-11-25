@@ -81,8 +81,9 @@ async function ReproLimaContent() {
     let permissions: Awaited<ReturnType<typeof getMasterPermissions>>;
     let gfStores: string[];
     [data, pending, permissions, autoGuideStores, gfStores, courierAutoStores] = await Promise.all([
-      timed(times, "casos", loadReproLima(createAdminSupabase(), scope, new Date(), { attention: true })),
-      timed(times, "pendientes", loadLimaPending(createAdminSupabase(), scope)),
+      // Las dos lecturas dejan además el tiempo de cada espera en fila (`c.*` y `p.*`, 25-11-2026).
+      timed(times, "casos", loadReproLima(createAdminSupabase(), scope, new Date(), { attention: true, times })),
+      timed(times, "pendientes", loadLimaPending(createAdminSupabase(), scope, new Date(), times)),
       getMasterPermissions(),
       // Best-effort: sin la lectura, «Mañana sin guía» alarma como antes.
       loadGfAutoActiveStores(createAdminSupabase(), [...scope.storeIds]).catch(() => []),
