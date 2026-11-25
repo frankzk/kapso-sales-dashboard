@@ -34,6 +34,7 @@ import { routingLabel } from "@/lib/lead-routing";
 import { createAdminSupabase } from "@/lib/db";
 import { listaNegraMarksAmong } from "@/lib/lista-negra-server";
 import { withListaNegra } from "@/lib/lista-negra";
+import { pageLoadTimer } from "@/lib/page-load-log";
 
 export const dynamic = "force-dynamic";
 
@@ -82,6 +83,8 @@ async function LeadsContent({
 }: {
   searchParams: Promise<LeadsSearchParams>;
 }) {
+  // Una línea por carga en los logs (lib/page-load-log.ts): solo tiempos y conteos.
+  const load = pageLoadTimer("leads");
   const sp = await searchParams;
   const stores = await getAccessibleStores();
 
@@ -140,13 +143,13 @@ async function LeadsContent({
   const currency = store?.currency ?? "PEN";
   const timezone = store?.timezone ?? "America/Lima";
 
-  const snapshotPromise = getLeadQueueSnapshot(scope);
-  const routingPromise = getLeadRoutingScope(scope);
+  const snapshotPromise = load.timed("cola", getLeadQueueSnapshot(scope));
+  const routingPromise = load.timed("reparto", getLeadRoutingScope(scope));
   // "Por llamar" se filtra/cuenta en cliente (jerarquía de facetas), así que la
   // cola se pagina completa (`null`) para que los conteos y drill-downs usen el
   // mismo universo que el gráfico; las demás vistas mantienen el tope estándar.
-  const leadsPromise = getStoreLeads(scope, view, leadsViewLimit(view))
-    .then((rows) => withProductOpeners(createAdminSupabase(), rows));
+  const leadsPromise = load.timed("lista", getStoreLeads(scope, view, leadsViewLimit(view))
+    .then((rows) => withProductOpeners(createAdminSupabase(), rows)));
   const userPromise = getCurrentUser();
   // El siguiente lead (MOM §11) se reserva solo a quien vende: quien solo
   // supervisa la cola no retiene leads por mirarla.
@@ -184,7 +187,7 @@ async function LeadsContent({
   // El filtro de cobertura (Lima / Provincia) solo existe en «Por llamar». Sus
   // lecturas son independientes de la lista y no la esperan.
   const inQueue = view === "por_llamar";
-  const priorCoveragePromise = inQueue ? getLeadPriorCoverage(scope) : Promise.resolve<Record<string, string>>({});
+  const priorCoveragePromise = inQueue ? load.timed("coberturaAnterior", getLeadPriorCoverage(scope)) : Promise.resolve<Record<string, string>>({});
   const coverageRulesPromise = inQueue ? getDistrictCoverageRules(scope) : Promise.resolve<DistrictCoverageRule[]>([]);
   const shopifyLocationsPromise = inQueue
     ? getLeadShopifyLocations(scope)
@@ -217,6 +220,7 @@ async function LeadsContent({
     routingPromise,
   ]);
   const listaNegra = await listaNegraPromise;
+  load.done({ filas: leads.length });
   const storeOrg = new Map(stores.map((s) => [s.id, s.org_id]));
   const markedLeads = withListaNegra(leads, listaNegra, storeOrg, (l) => l.phone);
 

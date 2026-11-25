@@ -12,6 +12,7 @@ import { getCourierRouteLedger, getPendingReturns } from "@/lib/courier-route-le
 import { limaDate } from "@/lib/sheets/resolver";
 import { listReturnManifestRiders } from "@/lib/return-manifest-access";
 import { RETURN_MANIFEST_PERMISSION } from "@/lib/return-manifest";
+import { pageLoadTimer } from "@/lib/page-load-log";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +27,8 @@ export default function CourierPage({ searchParams }: { searchParams: Promise<SP
 }
 
 async function CourierContent({ searchParams }: { searchParams: Promise<SP> }) {
+  // Una línea por carga en los logs (lib/page-load-log.ts): solo tiempos y conteos.
+  const load = pageLoadTimer("courier");
   const [sp, permissions, memberships] = await Promise.all([
     searchParams,
     getMasterPermissions(),
@@ -59,12 +62,13 @@ async function CourierContent({ searchParams }: { searchParams: Promise<SP> }) {
   // la tarjeta «Devoluciones» no lo ofrece.
   const canReturnManifest = permissions.can(RETURN_MANIFEST_PERMISSION);
   const [snapshot, dispatch, ledger, pendingReturns, returnManifestRiders] = await Promise.all([
-    loadCourierConfig(orgId),
-    getDispatchWorkspaceData(),
-    getCourierRouteLedger({ day }),
-    getPendingReturns({ storeIds }).catch(() => []),
+    load.timed("tarifario", loadCourierConfig(orgId)),
+    load.timed("despacho", getDispatchWorkspaceData()),
+    load.timed("rutas", getCourierRouteLedger({ day })),
+    load.timed("devoluciones", getPendingReturns({ storeIds }).catch(() => [])),
     canReturnManifest ? listReturnManifestRiders(orgId).catch(() => []) : Promise.resolve([]),
   ]);
+  load.done({ manifiestos: dispatch.manifests.length, devolucionesPendientes: pendingReturns.length });
   const nowIso = new Date().toISOString();
   const today = limaDate(nowIso) ?? nowIso.slice(0, 10);
   return <GrupoGfCourierBoard orgId={orgId} snapshot={snapshot} manifests={dispatch.manifests} today={today} nowIso={nowIso} ledger={ledger} pendingReturns={pendingReturns} returnManifestRiders={returnManifestRiders} />;
