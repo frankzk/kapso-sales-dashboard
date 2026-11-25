@@ -6128,6 +6128,30 @@ pedía tres veces. Desde entonces:
 - No cambia ninguna regla: ni el candado, ni el episodio, ni qué se puede
   atender. Solo cuándo se lee.
 
+**«Guardar y pasar al siguiente» pasa en el acto (25-11-2026, la usuaria
+principal: «aún se queda en el mismo pedido»).** Lo que pasaba, visto en su
+video y reproducido en un navegador: la llamada sí se guardaba, la ficha
+quedaba en blanco unos segundos y volvía a abrir el mismo pedido, en «Operar».
+Dos causas juntas. El guardado traía la lista entera en su respuesta y, al
+pasar al siguiente en ese instante, el navegador la descartaba y la pedía dos
+veces más: tres lecturas enteras a la vez, justo cuando la ficha siguiente
+intentaba abrirse. Y el navegador no llegaba a anotar la dirección del
+siguiente: la lectura que llegaba después reponía la del pedido guardado.
+Desde entonces:
+- Al pasar al siguiente, el guardado ya no trae la lista en su respuesta: solo
+  guarda. La ficha del siguiente se abre en el acto.
+- Si la dirección vuelve al pedido recién guardado, la ficha sigue enseñando el
+  siguiente y corrige la dirección, durante 30 segundos. Abrir un pedido a
+  mano, cerrar la ficha o ir atrás manda siempre.
+- La lista se pide una sola vez, de fondo, unos 2,5 segundos después: la fila
+  del pedido guardado cambia de lugar ahí, no antes.
+- Sigue igual que antes (la lista llega con el guardado) cuando la ficha no va
+  a pasar al siguiente: «Guardar» sin siguiente, un error, «Confirma fecha»
+  que cambia el programa o pide la Mesa de ruta, una venta anulada y
+  «Desarmar y cerrar sin llamada».
+- No cambia qué se guarda, el candado, el episodio ni cuál es el siguiente.
+  Pruebas: `test/repro-lima-pasar-siguiente.test.ts`.
+
 **Cuánto tarda cada lectura (owner, 25-11-2026: «que Repro Lima quede con
 carga rápida»).** Medido ese día, ya con una sola lectura por guardado: cada
 lectura de la pantalla tardaba de 2,3 a 3,6 s y hacía unas 260 consultas

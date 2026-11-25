@@ -273,9 +273,18 @@ export interface RegisterReproCallInput {
    * Google Maps o el par (06-11-2026). Se guarda en el pedido.
    */
   coordinate?: string | null;
+  /**
+   * «Guardar y pasar al siguiente» (25-11-2026): la ficha pasa al siguiente en el
+   * acto y pide la lista de fondo, así que la acción no la trae en su respuesta.
+   * Solo se cumple cuando la ficha de verdad va a pasar (sin error, sin Mesa de
+   * ruta, sin venta anulada y sin tocar el programa); si no, se revalida como siempre.
+   */
+  deferRefresh?: boolean;
 }
 
 export interface RegisterReproCallResult extends ReproActionResult {
+  /** La acción no trajo la pantalla (`deferRefresh`): quien guarda la pide después. */
+  refreshDeferred?: boolean;
   /** La venta terminó aunque no se haya podido registrar después la llamada. */
   saleCancelled?: boolean;
   callId?: string;
@@ -556,8 +565,21 @@ async function recordCall(scope: ReproScope, input: RegisterReproCallInput): Pro
       nextCallAt,
       noAnswerCount: after?.no_answer_count ?? (c.no_answer_count ?? 0) + (input.outcome === "no_contesta" ? 1 : 0),
     });
-    revalidatePath(REPRO_LIMA_PATH);
-    if (next.programChanged) revalidatePath(COURIER_PATH);
+    // LA PANTALLA NO VIENE CON EL GUARDADO CUANDO SE PASA AL SIGUIENTE (owner,
+    // 25-11-2026; la usuaria principal: «aún se queda en el mismo pedido»).
+    // Revalidar aquí hace que la respuesta traiga la pantalla entera (~2 s). Al
+    // pasar al siguiente en ese instante, el navegador descartaba esa pantalla y
+    // la pedía dos veces más: tres lecturas enteras a la vez, justo cuando la
+    // ficha siguiente intentaba abrirse (medido en un navegador real con esta
+    // misma secuencia). Con `deferRefresh` la acción solo guarda y la ficha pide
+    // la lista una vez, de fondo. Solo cuando de verdad va a pasar al siguiente:
+    // con error o Mesa de ruta la ficha se queda, y si cambió el programa
+    // Courier también tiene que enterarse.
+    const refreshDeferred = Boolean(input.deferRefresh) && !saleNotice && !next.error && !next.href && !next.programChanged;
+    if (!refreshDeferred) {
+      revalidatePath(REPRO_LIMA_PATH);
+      if (next.programChanged) revalidatePath(COURIER_PATH);
+    }
     return {
       notice: saleNotice ?? next.notice,
       ...(saleNotice ? { saleCancelled: true } : {}),
@@ -565,6 +587,7 @@ async function recordCall(scope: ReproScope, input: RegisterReproCallInput): Pro
       ...(next.error ? { error: next.error } : {}),
       callId: recorded.call_id,
       duplicate: Boolean(recorded.duplicate),
+      ...(refreshDeferred ? { refreshDeferred: true } : {}),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
