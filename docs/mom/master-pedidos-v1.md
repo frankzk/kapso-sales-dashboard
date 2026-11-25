@@ -21069,9 +21069,19 @@ panel suelto y su entrada «GF Courier» en el índice de la ficha se retiraron.
 - **Grupo GF ya no sale con salidas nuevas (owner, 17-11-2026).** «Tomar pedidos» ya no crea cajas de Grupo GF en las
   tiendas con GF Courier por API (Kenku y Aurela, desde el 16-11) y «Sacar con salida nueva» queda cerrado
   (`GRUPO_GF_NEW_OUTPUTS_CLOSED`); las salidas que ya existen siguen su curso (asignar, cotejar, reportar, retornar). El reparto en Lima va por GF Courier.
-- **Con motorizado no se anula desde Kapta.** Antes de pedir la anulación, `cancelGfGuideFor` lee la guía en GF: si
-  está asignada a un motorizado (etapa `AWAITING_OFFICE_CHECK` o `AWAITING_RIDER`) o ya salió (`OUT_FOR_DELIVERY`,
-  `INCIDENT`, `REFUSED`, `RETURNING`), no la anula y dice por qué (`gfCancelBlockedByRider`).
+- **Solo en reparto con el motorizado no se anula desde Kapta (owner, 25-11-2026, #AUR901417: «la única limitante que
+  deberíamos de poner es si la guía ya está en reparto con el motorizado»).** Antes de pedir la anulación,
+  `cancelGfGuideFor` lee la guía en GF: si la caja ya salió (`OUT_FOR_DELIVERY`, `INCIDENT` sin volver al almacén,
+  `REFUSED`, `RETURNING`), no la anula y dice por qué (`gfCancelBlockedByRider`). **Asignada a un motorizado pero sin
+  salir** (etapa `AWAITING_OFFICE_CHECK` o `AWAITING_RIDER`) ya no frena: Kapta pide la anulación y GF la retira sola de
+  la carga que se está armando (queda en Despacho como retirada, «Anulado por la tienda»), la anula en el acto y la carga
+  sigue con los demás pedidos. Vale para «Anular en GF Courier», para la guía de Aliclik o Swayp que la reemplaza y para
+  el acuerdo de Repro Lima con otro courier. Hasta el 24-11 (regla del 17-11: «con motorizado no se anula desde Kapta»)
+  había que pedirle a GF que la retirara de la carga, y esa espera podía durar toda la mañana.
+- **Anulada en el acto también si ya había salido una vez (GF 087, 25-11-2026).** #AUR901417, #AUR901330, #AUR901448 y
+  #AUR901420 salieron, no contestaron, volvieron, se desarmaron y se armaron de nuevo; al pasarlos a Aliclik quedaron en
+  «Anulación en curso» en GF hasta «Confirmar desarmado», porque GF no completaba sola la anulación de ningún pedido que
+  hubiera estado alguna vez en una carga. Corregido en GF: quedan anulados en el acto como cualquier otro.
 - **La caja que volvió al almacén de GF sí se anula (owner, 24-11-2026, #KP206846, #KP206937, #KP206970: «no me deja
   anular la guía de GF para registrarlo con Aliclik»).** Las tres salieron el 17-11 con Alexis, no contestaron y
   volvieron al almacén de GF, que las dejó guardadas («sale cuando la tienda pida una nueva fecha, o se desarma si la
