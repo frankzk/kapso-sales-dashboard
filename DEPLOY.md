@@ -85,6 +85,21 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 25-11-2026 · Los avisos de cobranza avanzan con un proceso y las pestañas casi solo leen (sin migración, MOM §12)
+
+Sin migración ni variables. **Cron nuevo** en `vercel.json`: `/api/cron/collection-alerts`, cada 5 minutos
+(`2-57/5 * * * *`), con `CRON_SECRET` como los demás. Solo producción.
+
+Antes, cada consulta del aviso flotante de cobranza (cada 20 s, en cada pestaña abierta) hacía avanzar los avisos
+de todas las tiendas: unas 150 pasadas por minuto. Y sin nadie conectado no avanzaban. Ahora los mueve el proceso
+cada 5 minutos, y la consulta de una pestaña como mucho una vez por minuto por servidor y tienda.
+
+Lo que cambia para el equipo: con Kapta abierto, un aviso vencido pasa a la siguiente persona en un minuto y pico
+(antes, 20 segundos). Sin nadie conectado, ahora sí avanza: un aviso que llega de noche sube la escalera esa noche.
+
+Verificar, en Vercel → Logs: la línea `[collection-alerts] {"stores":…,"resolved":…,"unattributed":…,"moved":…}`
+cada 5 minutos, sin `errors`.
+
 ### 25-11-2026 · Los sellos del cierre de Aliclik no cuentan como cambio de la guía (0355, MOM §19.2)
 
 **Migración 0355** (`db/migrations/0355_aliclik_followup_no_touch.sql`): solo cambia la función del trigger de

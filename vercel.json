@@ -142,6 +142,10 @@
       "schedule": "2-57/5 * * * *"
     },
     {
+      "path": "/api/cron/collection-alerts",
+      "schedule": "2-57/5 * * * *"
+    },
+    {
       "path": "/api/cron/product-photos",
       "schedule": "48 * * * *"
     },

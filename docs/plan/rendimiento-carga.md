@@ -293,21 +293,36 @@ las 1.056 lecturas de Repro Lima del 24-11 y los 28.763 recálculos diarios.
 
 ### Hallazgos nuevos
 
-1. **El cierre de Aliclik toca guías que no cambiaron** (casi seguro; falta
-   confirmarlo). Cada 20 minutos anota en unas 130 guías que las revisó
-   (`aliclik_followup_at`, `reason_probed_at`). La base cuenta eso como un
-   cambio de la guía, el Master recalcula el pedido y todas las pestañas del
-   Master se recargan. Medido: 828 guías no entregadas tocadas en tres horas,
-   en los minutos 10, 30 y 50, con 6 eventos reales. Se arregla con una
-   migración corta (la misma regla de la 0204), que se aplica a mano.
+1. **El cierre de Aliclik tocaba guías que no cambiaron. Confirmado, con su
+   migración lista (0355).** Cada 20 minutos anota en las guías que persigue
+   que ya les preguntó (`aliclik_followup_at`). La base contaba eso como un
+   cambio de la guía, el Master recalculaba el pedido y todas las pestañas del
+   Master se recargaban. Medido el 25-11: de 1.219 guías de Aliclik tocadas en
+   tres horas, 997 solo habían recibido esa anotación. La migración
+   `0355_aliclik_followup_no_touch.sql` aplica la misma regla de la 0204 y la
+   0321; se aplica a mano, fuera de horario (DEPLOY.md).
 2. **La foto de pedidos para boletas ya no tiene qué fotografiar.** La última
    es del 04-11-2026 y los 2.039 pedidos de la última semana son de
    WooCommerce, que no llevan foto. El cron sigue preguntando a la base. Se
    podría apagar; es decisión del owner (MOM §35.10).
 
+### Avisos de cobranza (aprobado el 25-11-2026)
+
+Antes, cada consulta del aviso flotante (cada 20 s, en cada pestaña) hacía
+avanzar los avisos de todas las tiendas: unas 150 pasadas por minuto, y sin
+nadie conectado no avanzaban. Ahora:
+- Un proceso los hace avanzar cada 5 minutos, haya o no alguien conectado.
+- Con Kapta abierto, cada servidor los hace avanzar como mucho una vez por
+  minuto por tienda; entre medias la consulta solo lee.
+
+No quedó «una vez por minuto» con un proceso: varios procesos tienen su minuto
+reservado y uno de cada minuto los pisaría. El efecto para el equipo es el
+mismo: con Kapta abierto, un aviso vencido pasa a la siguiente persona en un
+minuto y pico.
+
 ### Siguiente paso propuesto
 
-1. Desplegar y medir un día.
-2. La migración del hallazgo 1.
+1. Medir un día con lo que ya está en producción (desde el 25-11-2026).
+2. Aplicar la migración 0355, fuera de horario.
 3. Con los tiempos reales de Leads y del Master, elegir entre los cambios 3,
    4, 5 y 9 de la fase 1.

@@ -12983,6 +12983,27 @@ sin entrega). La simulación muestra qué saldría hoy sin enviar nada.
         ahí compiten por atender primero, aquí hay un responsable. La oferta
         aguanta sus minutos con el navegador cerrado; si saltara al
         desconectarse, todo acabaría siempre en el último escalón.
+      - **Quién hace avanzar la escalera (25-11-2026, decisión del owner).**
+        Hasta entonces la hacía avanzar cada consulta de cada pestaña abierta
+        (el aviso flotante pregunta cada 20 s): unas 150 pasadas por minuto,
+        y con nadie conectado la escalera no se movía hasta que alguien abría
+        Kapta. Desde entonces:
+        - **Un proceso la hace avanzar cada 5 minutos**
+          (`/api/cron/collection-alerts`, minutos 2, 7, …, 57), en las tiendas
+          con algún aviso abierto, **haya o no alguien conectado**. Es lo que
+          la regla de arriba ya decía: los minutos cuentan con el navegador
+          cerrado. Un aviso que llega de noche sube la escalera esa noche; en
+          la mañana lo tienen delante todos los escalones que le tocaron.
+        - **Con Kapta abierto, cada servidor la hace avanzar como mucho una
+          vez por minuto por tienda** (`claimAdvanceTurn`); entre medias, la
+          consulta de la pestaña solo lee. Un aviso vencido pasa a la
+          siguiente persona en un minuto y pico (antes, en 20 segundos).
+        - La consulta no deja de hacerlo del todo a propósito: si el proceso
+          dejara de correr, la escalera seguiría avanzando mientras alguien
+          tenga Kapta abierto, como siempre.
+        - No cambia quién ve cada aviso, los minutos de cada escalón, ni que
+          se retiren solos con el hecho que los resuelve: cambia quién los
+          mueve y cada cuánto (`lib/collection-alerts-advance.ts`).
       - **El último escalón no escala.** Alguien tiene que ser el final; pasar
         de largo dejaría la alerta sin dueño, que es peor que dejarla con quien
         no la quiere.
