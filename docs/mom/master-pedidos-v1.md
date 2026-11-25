@@ -2886,7 +2886,7 @@ nada instalado, y Kapta solo hace salidas.
   10 minutos (minutos 1, 11, 21, 31, 41 y 51; a los :11 comparte minuto con
   la regla automática de la lista de pago adelantado; hasta el 25-11-2026
   también lo compartía con la foto de los pedidos para boletas, que corría en
-  todos los minutos impares y ahora va en los 2, 7, 12, …, 57) y hace, en
+  todos los minutos impares y ese día se apagó) y hace, en
   todas las
   organizaciones, lo que la ficha solo hace al abrirse:
   1. cierra las llamadas que Anura dejó colgadas, con las mismas reglas de
@@ -12983,6 +12983,27 @@ sin entrega). La simulación muestra qué saldría hoy sin enviar nada.
         ahí compiten por atender primero, aquí hay un responsable. La oferta
         aguanta sus minutos con el navegador cerrado; si saltara al
         desconectarse, todo acabaría siempre en el último escalón.
+      - **Quién hace avanzar la escalera (25-11-2026, decisión del owner).**
+        Hasta entonces la hacía avanzar cada consulta de cada pestaña abierta
+        (el aviso flotante pregunta cada 20 s): unas 150 pasadas por minuto,
+        y con nadie conectado la escalera no se movía hasta que alguien abría
+        Kapta. Desde entonces:
+        - **Un proceso la hace avanzar cada 5 minutos**
+          (`/api/cron/collection-alerts`, minutos 2, 7, …, 57), en las tiendas
+          con algún aviso abierto, **haya o no alguien conectado**. Es lo que
+          la regla de arriba ya decía: los minutos cuentan con el navegador
+          cerrado. Un aviso que llega de noche sube la escalera esa noche; en
+          la mañana lo tienen delante todos los escalones que le tocaron.
+        - **Con Kapta abierto, cada servidor la hace avanzar como mucho una
+          vez por minuto por tienda** (`claimAdvanceTurn`); entre medias, la
+          consulta de la pestaña solo lee. Un aviso vencido pasa a la
+          siguiente persona en un minuto y pico (antes, en 20 segundos).
+        - La consulta no deja de hacerlo del todo a propósito: si el proceso
+          dejara de correr, la escalera seguiría avanzando mientras alguien
+          tenga Kapta abierto, como siempre.
+        - No cambia quién ve cada aviso, los minutos de cada escalón, ni que
+          se retiren solos con el hecho que los resuelve: cambia quién los
+          mueve y cada cuánto (`lib/collection-alerts-advance.ts`).
       - **El último escalón no escala.** Alguien tiene que ser el final; pasar
         de largo dejaría la alerta sin dueño, que es peor que dejarla con quien
         no la quiere.
@@ -16942,6 +16963,16 @@ precisa es **qué escritura cuenta como cambio de la guía**.
 - **`last_report_at` sí cuenta.** Lo escriben el Excel, Olva y Tanders, y los
   barridos de Olva y Shalom eligen qué guía leer después ordenando por
   `updated_at`: si dejara de moverlo, se quedarían releyendo siempre las mismas.
+- **Los sellos del cierre de Aliclik tampoco son un cambio (0356, owner
+  25-11-2026).** El cierre (`/api/cron/aliclik-close`) anota en cada guía que
+  persigue cuándo le preguntó a Aliclik (`aliclik_followup_at`) y cuándo
+  consultó el motivo de una devuelta (`reason_probed_at`). Ordenan su propia
+  cola y el Master no los lee. Medido el 25-11-2026: de 1.219 guías de Aliclik
+  tocadas en tres horas, 997 solo habían recibido ese sello, y cada una dejaba
+  su pedido desfasado, recalculado y con la pantalla del Master recargándose.
+  Desde la 0356 una escritura que solo toca esos sellos deja `updated_at` como
+  estaba, igual que los de la API (0204) y los del rastreo de Shalom (0321).
+  Prueba: `scripts/sql/aliclik_followup_no_touch_smoke.sql`.
 - **En el Master, un recálculo que no cambia nada tampoco es un cambio.**
   `recomputed_at` dice cuándo se recalculó la fila; `updated_at`, cuándo cambió
   lo que la fila dice. Solo lo segundo le avisa a la pantalla de que hay algo
@@ -23946,11 +23977,13 @@ tamaño del lote sale de lo que Shopify dice que pide cada pedido
 1000; 1 con un balde de 1000, por la reserva); si Shopify contesta que el lote
 pasa el tope (`MAX_COST_EXCEEDED`), se achica sin perder pedidos.
 
-**Qué pedidos.** El cron `/api/cron/invoice-snapshots`, **cada 5 minutos, en
-los minutos 2, 7, 12, …, 57** (`2-57/5`: nunca arranca con el barrido de
-boletas de los minutos 6, 16, …, ni en el :23 de la renovación de las apps
-propias de Shopify, ni en el :48 de la copia de fotos de producto; hasta el
-25-11-2026 corría cada 2 minutos, en los impares, ver «Cada 5 minutos» abajo),
+**Qué pedidos.** El cron `/api/cron/invoice-snapshots` **está apagado desde el
+25-11-2026** (ver «Apagado» abajo): ya no corre solo; la ruta sigue para
+correrla a mano. Mientras corrió —cada 2 minutos en los impares y, su último
+día, **cada 5 minutos, en los minutos 2, 7, 12, …, 57** (`2-57/5`: nunca con el
+barrido de boletas de los minutos 6, 16, …, ni en el :23 de la renovación de
+las apps propias de Shopify, ni en el :48 de la copia de fotos de producto; ver
+«Cada 5 minutos» abajo)—, cada pasada
 toma por tienda lo que la base dice que falta
 (`invoice_snapshot_candidates`, hasta 600 por pasada). Entra un pedido:
 
@@ -24015,6 +24048,24 @@ mucho». Lo que cambia: un pedido de Shopify que cambie se vuelve a tomar hasta
 5 minutos después, y una cola grande se vaciaría 2,5 veces más lento (95 s de
 trabajo cada 300 s). El presupuesto de la pasada, la reserva del cupo y el
 turno por tienda no cambian.
+
+**Apagado (owner, 25-11-2026).** El mismo día, con lo medido delante, el owner
+decidió apagarlo. Lo que cada pasada hacía ya, visto en sus propios registros:
+en una tienda no había nada que tomar (`candidates: 0`) y en la otra quedaba
+**un** pedido sin foto que Shopify rechaza con HTTP 403 desde el cierre
+(`tienda_caida`), así que cada pasada terminaba en error sin guardar nada. La
+última foto guardada es del 04-11-2026.
+- **Qué se apaga:** solo que corra solo. Se quitó de `vercel.json`.
+- **Qué no cambia:** las 11.670 fotos guardadas siguen ahí y las boletas de
+  esos pedidos se siguen emitiendo desde su foto (`foto_shopify`). Los pedidos
+  de WooCommerce nunca usaron foto (35.11). El barrido de boletas
+  (`/api/cron/invoices`) no se toca.
+- **Lo que queda sin foto:** ese pedido de Shopify. Con Shopify cerrado no hay
+  de dónde tomarla, con el cron o sin él; si hay que emitirle boleta, es el
+  caso de «Lo que no cubre» (a mano, `externa`, 35.4).
+- **Para volver a correrlo** (si Shopify se reabriera): la ruta sigue,
+  `GET /api/cron/invoice-snapshots` con `CRON_SECRET`, o `?dry=1` para solo
+  contar; y para que corra sola, devolver su entrada a `vercel.json`.
 
 **Una falla no tapa la cola** (revisión del 23-10-2026). Lo que es de la tienda
 para la tienda hasta la próxima pasada: THROTTLED (sin rojo), la tienda que ya
@@ -24083,7 +24134,8 @@ Implementación:
   `SNAPSHOT_FALLBACK_FROM`.
 - `app/api/cron/invoice-snapshots/route.ts`: la ruta (`maxDuration` 120), con
   `CRON_SECRET`; fuera de producción no llama a Shopify, y sin la 0275 contesta
-  `sin_migracion`. En `vercel.json`, `2-57/5 * * * *`.
+  `sin_migracion`. Ya no está en `vercel.json`: apagado el 25-11-2026 (antes,
+  `2-57/5 * * * *`).
 - `lib/invoicing/shopify-order.ts`: `requestOrderForInvoice` (la misma llamada
   para la boleta y para la foto) y la lectura de la foto en
   `fetchOrderForInvoice`; `lib/invoicing/server.ts` pone `foto_shopify` en la

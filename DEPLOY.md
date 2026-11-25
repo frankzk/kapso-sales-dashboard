@@ -85,6 +85,64 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 25-11-2026 · Se apaga la foto de pedidos de Shopify para boletas (sin migración, MOM §35.10)
+
+Sin migración ni variables. **Se quita un cron** de `vercel.json`: `/api/cron/invoice-snapshots` ya no corre solo.
+La ruta se queda para correrla a mano.
+
+Por qué: Shopify cerró el 28-10-2026 y la última foto guardada es del 04-11-2026. En los registros, cada pasada
+terminaba en error sin guardar nada: una tienda sin nada que tomar y la otra con un pedido que Shopify rechaza con
+HTTP 403. Los pedidos nuevos son todos de WooCommerce, que no usan foto.
+
+No cambia: las fotos guardadas siguen ahí y sus boletas se emiten igual; el barrido de boletas
+(`/api/cron/invoices`) no se toca.
+
+Verificar, en Vercel → Logs: deja de aparecer la línea `[invoice-snapshots]` (y su error de cada 5 minutos).
+
+### 25-11-2026 · Los avisos de cobranza avanzan con un proceso y las pestañas casi solo leen (sin migración, MOM §12)
+
+Sin migración ni variables. **Cron nuevo** en `vercel.json`: `/api/cron/collection-alerts`, cada 5 minutos
+(`2-57/5 * * * *`), con `CRON_SECRET` como los demás. Solo producción.
+
+Antes, cada consulta del aviso flotante de cobranza (cada 20 s, en cada pestaña abierta) hacía avanzar los avisos
+de todas las tiendas: unas 150 pasadas por minuto. Y sin nadie conectado no avanzaban. Ahora los mueve el proceso
+cada 5 minutos, y la consulta de una pestaña como mucho una vez por minuto por servidor y tienda.
+
+Lo que cambia para el equipo: con Kapta abierto, un aviso vencido pasa a la siguiente persona en un minuto y pico
+(antes, 20 segundos). Sin nadie conectado, ahora sí avanza: un aviso que llega de noche sube la escalera esa noche.
+
+Verificar, en Vercel → Logs: la línea `[collection-alerts] {"stores":…,"resolved":…,"unattributed":…,"moved":…}`
+cada 5 minutos, sin `errors`.
+
+### 25-11-2026 · Los sellos del cierre de Aliclik no cuentan como cambio de la guía (0356, MOM §19.2)
+
+**Migración 0356** (`db/migrations/0356_aliclik_followup_no_touch.sql`): solo cambia la función del trigger de
+`shipments.updated_at` (la de la 0204 y la 0321) para que `aliclik_followup_at` y `reason_probed_at` no lo muevan.
+Sin columnas, índices ni datos nuevos. Se puede desplegar el código **antes o después** de aplicarla: ningún código
+depende de ella. Correrla otra vez no cambia nada. **No se aplica sola**:
+
+```bash
+psql "$DATABASE_URL" -f db/migrations/0356_aliclik_followup_no_touch.sql
+```
+
+Toma un bloqueo corto sobre `shipments` (el `create or replace` de la función): mejor fuera de horario.
+
+El caso, medido el 25-11-2026: el cierre de Aliclik (minutos 10, 30 y 50) anota en cada guía que persigue que ya le
+preguntó. La base contaba esa anotación como un cambio de la guía: el pedido quedaba desfasado, el Master lo
+recalculaba y cada pestaña del Master se recargaba. De 1.219 guías de Aliclik tocadas en tres horas, 997 solo habían
+recibido esa anotación.
+
+Verificar después de aplicarla, pasados los minutos 10, 30 o 50 (solo lee):
+
+```sql
+select count(*) as tocadas,
+       count(*) filter (where abs(extract(epoch from (updated_at - aliclik_followup_at))) < 3) as solo_por_el_sello
+from shipments
+where courier = 'aliclik' and updated_at > now() - interval '30 minutes';
+```
+
+`solo_por_el_sello` debe quedar en 0 (antes, unas 130 por pasada).
+
 ### 25-11-2026 · Correo · Resend: subir a Resend los clientes que aceptan publicidad (0355, MOM §46)
 
 **Migración 0355_resend_marketing: ya aplicada en producción (25-11-2026), antes del código.** Crea
