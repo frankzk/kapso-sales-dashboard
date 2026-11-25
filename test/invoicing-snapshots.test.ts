@@ -1031,16 +1031,18 @@ describe("vercel.json: la foto de los pedidos", () => {
     JSON.parse(readFileSync(resolve(__dirname, "../vercel.json"), "utf8")) as { crons: { path: string; schedule: string }[] }
   ).crons;
 
-  it("cada 5 minutos (owner, 25-11-2026; antes cada 2), sin que una pasada pise a la siguiente", () => {
-    expect(crons).toContainEqual({ path: "/api/cron/invoice-snapshots", schedule: "2-57/5 * * * *" });
-    // Nunca arranca en el minuto del barrido de boletas (6, 16, …, 56), ni en el
-    // :23 de las apps propias de Shopify, ni en el :48 de las fotos de producto.
-    const mine = Array.from({ length: 12 }, (_, k) => 5 * k + 2);
-    expect(mine).toEqual([2, 7, 12, 17, 22, 27, 32, 37, 42, 47, 52, 57]);
-    for (const m of [6, 16, 26, 36, 46, 56, 23, 48]) expect(mine).not.toContain(m);
-    // La pasada termina antes de que empiece la próxima (y el turno de la base
-    // lo cuida si se atrasa): 95 s de trabajo + una llamada de 15 s < 120 s de
-    // la ruta, y la próxima llega a los 300 s.
+  it("apagado desde el 25-11-2026 (owner): ya no corre solo, y la ruta sigue para correrla a mano", () => {
+    // Shopify cerró: una tienda sin candidatos y la otra con un pedido que
+    // Shopify rechaza con HTTP 403. Cada pasada terminaba en error sin guardar.
+    expect(crons.filter((c) => c.path === "/api/cron/invoice-snapshots")).toEqual([]);
+    // El barrido de boletas no se toca.
+    expect(crons.some((c) => c.path === "/api/cron/invoices")).toBe(true);
+    // La ruta existe y sigue pidiendo el secreto de los crons.
+    const src = readFileSync(resolve(__dirname, "../app/api/cron/invoice-snapshots/route.ts"), "utf8");
+    expect(src).toContain("APAGADO DESDE EL 25-11-2026 (owner)");
+    expect(src).toContain('if (!internalAuthorized(req)) return new NextResponse("unauthorized", { status: 401 });');
+    // Si se corre a mano, la pasada sigue cabiendo en la ruta: 95 s de trabajo
+    // + una llamada de 15 s < 120 s.
     expect(INVOICE_SNAPSHOT_BUDGET_MS + SHOPIFY_READ_TIMEOUT_MS).toBeLessThan(120_000);
   });
 });
@@ -1058,6 +1060,8 @@ describe("la regla está escrita (MOM §35.10, DEPLOY.md)", () => {
     expect(s3510).toContain("**Una foto con el pedido nunca se pisa con una\nque no lo trae**");
     expect(s3510).toContain("`2-57/5`");
     expect(s3510).toContain("**Cada 5 minutos (owner, 25-11-2026).**");
+    expect(s3510).toContain("**Apagado (owner, 25-11-2026).**");
+    expect(s3510.replace(/\s+/g, " ")).toContain("las 11.670 fotos guardadas siguen ahí y las boletas de esos pedidos se siguen emitiendo desde su foto");
     expect(s3510).toContain("`points.requested`, `points.actual`");
   });
 

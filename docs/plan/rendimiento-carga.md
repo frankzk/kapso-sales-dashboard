@@ -301,10 +301,12 @@ las 1.056 lecturas de Repro Lima del 24-11 y los 28.763 recálculos diarios.
    tres horas, 997 solo habían recibido esa anotación. La migración
    `0355_aliclik_followup_no_touch.sql` aplica la misma regla de la 0204 y la
    0321; se aplica a mano, fuera de horario (DEPLOY.md).
-2. **La foto de pedidos para boletas ya no tiene qué fotografiar.** La última
-   es del 04-11-2026 y los 2.039 pedidos de la última semana son de
-   WooCommerce, que no llevan foto. El cron sigue preguntando a la base. Se
-   podría apagar; es decisión del owner (MOM §35.10).
+2. **La foto de pedidos para boletas ya no tenía qué fotografiar. Apagada el
+   25-11-2026 por decisión del owner.** La última es del 04-11-2026 y los
+   2.039 pedidos de la última semana son de WooCommerce, que no llevan foto.
+   Cada pasada terminaba en error: Shopify rechaza con HTTP 403 el único pedido
+   que quedaba sin foto. Las fotos guardadas y la emisión de boletas no cambian
+   (MOM §35.10).
 
 ### Avisos de cobranza (aprobado el 25-11-2026)
 

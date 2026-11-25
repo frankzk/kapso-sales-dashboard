@@ -19,7 +19,7 @@
 // CUÁNTO. Las tiendas de las organizaciones que facturan en Kapta (con un RUC
 // dado de alta, §35.2) y activas, las dos a la vez (cada tienda tiene su propio
 // cupo en Shopify); las tiendas cliente facturan fuera (§29.15) y su Shopify no
-// se toca. El cron corre cada 5 minutos (minutos 2, 7, …, 57: `2-57/5`, lejos del
+// se toca. El cron (apagado desde el 25-11-2026, MOM §35.10) corría cada 5 minutos (`2-57/5`, lejos del
 // barrido de boletas) y cada pasada trabaja hasta `INVOICE_SNAPSHOT_BUDGET_MS`
 // (la ruta tiene 120 s); un turno por tienda en la base
 // (`invoice_snapshot_lease`) impide dos pasadas a la vez sobre la misma tienda.
@@ -99,7 +99,7 @@ export const INVOICE_SNAPSHOT_MAX_DURATION_S = 120;
  * Pasado esto no se empieza otra llamada a Shopify. Una llamada corta a los
  * 15 s (`SHOPIFY_READ_TIMEOUT_MS`) y guardar un lote toma menos de 2 s: la
  * pasada termina antes de ~112 s, dentro de los 120 s de la ruta y antes de que
- * el cron vuelva a correr (cada 5 minutos desde el 25-11-2026; antes, cada 2).
+ * el cron vuelva a correr (cada 2 minutos; apagado desde el 25-11-2026).
  */
 export const INVOICE_SNAPSHOT_BUDGET_MS = 95_000;
 

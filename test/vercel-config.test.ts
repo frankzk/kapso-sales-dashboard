@@ -115,7 +115,9 @@ describe("vercel.json", () => {
     //     §29.17, 16-11-2026).
     // 44: el avance de los avisos de cobranza, cada 5 minutos (MOM §12,
     //     25-11-2026): antes lo hacía cada consulta de cada pestaña.
-    expect(crons).toHaveLength(44);
+    // 43: se apagó la foto de pedidos de Shopify para boletas (MOM §35.10,
+    //     25-11-2026): Shopify cerró y cada pasada terminaba en error.
+    expect(crons).toHaveLength(43);
     for (const c of crons) {
       expect(c.path.startsWith("/api/cron/")).toBe(true);
       expect(c.schedule.trim().split(/\s+/)).toHaveLength(5);

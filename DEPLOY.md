@@ -85,6 +85,20 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 25-11-2026 · Se apaga la foto de pedidos de Shopify para boletas (sin migración, MOM §35.10)
+
+Sin migración ni variables. **Se quita un cron** de `vercel.json`: `/api/cron/invoice-snapshots` ya no corre solo.
+La ruta se queda para correrla a mano.
+
+Por qué: Shopify cerró el 28-10-2026 y la última foto guardada es del 04-11-2026. En los registros, cada pasada
+terminaba en error sin guardar nada: una tienda sin nada que tomar y la otra con un pedido que Shopify rechaza con
+HTTP 403. Los pedidos nuevos son todos de WooCommerce, que no usan foto.
+
+No cambia: las fotos guardadas siguen ahí y sus boletas se emiten igual; el barrido de boletas
+(`/api/cron/invoices`) no se toca.
+
+Verificar, en Vercel → Logs: deja de aparecer la línea `[invoice-snapshots]` (y su error de cada 5 minutos).
+
 ### 25-11-2026 · Los avisos de cobranza avanzan con un proceso y las pestañas casi solo leen (sin migración, MOM §12)
 
 Sin migración ni variables. **Cron nuevo** en `vercel.json`: `/api/cron/collection-alerts`, cada 5 minutos
