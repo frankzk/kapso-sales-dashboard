@@ -17710,7 +17710,13 @@ quedan visibles: los atiende la asesora; Kapta no oculta nada solo.
   clienta lo reabre.
 - **Lo anterior al webhook.** «Sincronizar redes» (permiso «Tiendas») trae de
   Zernio las cuentas, las últimas 30 conversaciones y los últimos 15 posts con
-  comentarios por cuenta.
+  comentarios por cuenta. **Lo de más de 7 días entra resuelto** (owner,
+  25-11-2026: la primera sincronización de Kenku trajo 205 por responder, 161 de
+  más de 7 días, comentarios desde marzo y mensajes sin ventana): un hilo cuyo
+  último mensaje es de la clienta y tiene más de 7 días queda en «Resueltas» y se
+  reabre solo si vuelve a escribir (`threadStatusAfter`). Ese día se resolvieron
+  así las 161 antiguas. Un mensaje directo sin texto (sticker, reacción o
+  publicación compartida) se ve como «Sin texto».
 - **Lo que falta para usarlo.** En Vercel, `ZERNIO_API_KEY` y
   `ZERNIO_WEBHOOK_SECRET`; en Zernio, el webhook con ese secreto; en Meta
   Business Suite, Zernio como app principal de las conversaciones (si no,

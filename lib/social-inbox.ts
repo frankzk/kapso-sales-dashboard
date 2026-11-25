@@ -185,6 +185,25 @@ export function dmReplyMode(lastInboundAt: string | null | undefined, now: Date 
   return "cerrado";
 }
 
+/**
+ * Lo antiguo entra resuelto (owner, 25-11-2026): la primera sincronización trajo
+ * comentarios desde marzo y mensajes sin ventana. Un hilo cuyo último mensaje es
+ * de la clienta y tiene más de 7 días no va a «Por responder»: queda resuelto, y
+ * se reabre solo si vuelve a escribir. Lo nuevo de la clienta lo abre; lo nuestro
+ * lo deja respondido (o resuelto si ya lo estaba).
+ */
+export const SOCIAL_STALE_DAYS = 7;
+
+export function threadStatusAfter(
+  current: "abierto" | "respondido" | "cerrado",
+  last: { direction: "in" | "out"; occurredAt: string },
+  now: Date = new Date(),
+): "abierto" | "respondido" | "cerrado" {
+  if (last.direction === "out") return current === "cerrado" ? "cerrado" : "respondido";
+  const age = now.getTime() - Date.parse(last.occurredAt);
+  return Number.isFinite(age) && age > SOCIAL_STALE_DAYS * 24 * HOUR ? "cerrado" : "abierto";
+}
+
 /** La respuesta por privado a un comentario: una sola y dentro de 7 días desde el comentario. */
 export function privateReplyAllowed(thread: { kind: SocialKind; private_reply_at?: string | null; created_at?: string | null }, firstCommentAt: string | null | undefined, now: Date = new Date()): boolean {
   if (thread.kind !== "comment" || thread.private_reply_at) return false;
