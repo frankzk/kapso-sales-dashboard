@@ -122,15 +122,15 @@ describe("«Sugerir con IA» (borrador sin enviar)", () => {
 
 describe("«Responder pendientes con IA»", () => {
   const src = read("lib/social-auto-server.ts");
-  const fn = src.slice(src.indexOf("export async function answerPendingWithAi"));
+  const fn = src.slice(src.indexOf("export async function answerOneWithAi"));
   it("los mensajes directos solo dentro de 24 h: después Meta exige una persona", () => {
     expect(fn).toContain('dmReplyMode(realIn) !== "libre"');
-    expect(fn).toContain("metaRefusedBefore(admin, row.id)");
+    expect(fn).toContain("metaRefusedBefore(admin, thread.id)");
     expect(fn).not.toContain("humanAgent");
   });
   it("no toca lo que una asesora abrió y usa las mismas llaves que lo automático", () => {
     expect(fn).toContain("HUMAN_HOLD_MS");
-    expect(fn).toContain("`ai:pub:${thread.external_id}`");
+    expect(fn).toContain("`ai:pub:${thread.external_id}${suffix}`");
     expect(fn).toContain("`ai:priv:${thread.external_id}`");
   });
   it("el privado cuenta los 7 días desde el comentario", () => {
@@ -164,6 +164,23 @@ describe("lo que falló en la primera pasada (25-11-2026)", () => {
   });
   it("habla como la tienda: no menciona el catálogo ni lo que sabe", () => {
     expect(buildSystemPrompt("Kenku Peru")).toContain("nunca menciones el catálogo");
+  });
+});
+
+describe("«Responder con IA» y la reserva propia (25-11-2026)", () => {
+  const src = read("lib/social-auto-server.ts");
+  const fn = src.slice(src.indexOf("export async function answerOneWithAi"));
+  it("la reserva de quien lo pide no frena a la IA; la de otra asesora, sí", () => {
+    expect(fn).toContain("thread.claimed_by !== actorId");
+  });
+  it("el botón del hilo existe y envía con la misma regla", () => {
+    const actions = read("app/dashboard/leads/redes/actions.ts");
+    const a = actions.slice(actions.indexOf("export async function answerSocialThreadWithAi"));
+    expect(a.slice(0, 900)).toContain("answerOneWithAi(createAdminSupabase(), threadId, got.userId)");
+    expect(read("components/social-inbox.tsx")).toContain("Responder con IA");
+  });
+  it("a mano, después del público sigue el privado", () => {
+    expect(read("components/social-inbox.tsx")).toContain("Enviado en público. Ahora el privado.");
   });
 });
 

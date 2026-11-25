@@ -17918,6 +17918,13 @@ estructurada (`lib/social-ai.ts`, `lib/social-ai-server.ts`):
   comentario que ya no admite privado recibe solo la respuesta pública, completa
   y sin prometer «te escribimos por interno». La IA habla como la tienda: no
   menciona el catálogo ni lo que sabe o no sabe.
+- **La reserva propia no frena a la IA (25-11-2026, el comentario de Cesar
+  Alegre quedó sin responder porque quien apretó el botón lo tenía abierto).**
+  «Responder pendientes con IA» salta solo lo que otra asesora abrió hace menos
+  de 10 minutos. En cada conversación, **«Responder con IA»** la contesta y la
+  envía ya con la misma regla (comentario: público y privado; mensaje directo:
+  dentro de 24 h; `answerOneWithAi`). A mano, después de enviar el público de un
+  comentario, la respuesta pasa sola a «Por privado» para mandar el privado.
 
 Implementación: `lib/zernio.ts` (cliente), `lib/social-inbox.ts` (lectura de
 avisos y plazos de Meta, puro), `lib/zernio-signature.ts`,
