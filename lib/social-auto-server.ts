@@ -14,6 +14,7 @@ import { wooGetPage } from "@/lib/woocommerce";
 import { withWooAuthFallback } from "@/lib/woocommerce-intake";
 import { zernioConfigured } from "@/lib/zernio";
 import { generateSocialAiReply, socialAiConfigured, storeCatalog } from "@/lib/social-ai-server";
+import type { SocialAiReply } from "@/lib/social-ai";
 
 export async function loadAutoSettings(admin: SupabaseClient, storeId: string): Promise<SocialAutoSettings | null> {
   const { data } = await admin.from("social_auto_settings").select("enabled,comment_keywords,public_text,private_text,dm_text").eq("store_id", storeId).maybeSingle();
@@ -88,7 +89,7 @@ export async function runSocialAutoReplies(admin: SupabaseClient, ev: Normalized
   return runTemplates(admin, ev, thread, settings, phone);
 }
 
-type AutoThread = SendableThread & {
+export type AutoThread = SendableThread & {
   ad_id: string | null; participant_name: string | null; private_reply_at: string | null; post_text: string | null;
   platform: string; claimed_by: string | null; claimed_at: string | null;
 };
@@ -98,6 +99,39 @@ async function loadThread(admin: SupabaseClient, threadId: string): Promise<Auto
     .select("id,store_id,account_id,kind,external_id,post_id,ad_id,participant_name,private_reply_at,post_text,platform,claimed_by,claimed_at")
     .eq("id", threadId).maybeSingle();
   return (data as AutoThread | null) ?? null;
+}
+
+/**
+ * La respuesta de la IA para un hilo, sin mandarla (la usa lo automático y el
+ * botón «Sugerir con IA»). "sin_turno" si lo último no es de la clienta; null
+ * si la IA no pudo (sin clave, sin WhatsApp de la tienda, error, negativa).
+ */
+export async function draftAiReply(admin: SupabaseClient, thread: AutoThread, phone: string | null): Promise<SocialAiReply | "sin_turno" | null> {
+  const storeId = thread.store_id;
+  if (!storeId) return null;
+  const [{ data: store }, catalog, adProduct, { data: rows }] = await Promise.all([
+    admin.from("stores").select("name").eq("id", storeId).maybeSingle(),
+    storeCatalog(admin, storeId),
+    productForAd(admin, storeId, thread.ad_id),
+    admin.from("social_messages").select("direction,text").eq("thread_id", thread.id).neq("status", "fallo")
+      .order("occurred_at", { ascending: false }).limit(12),
+  ]);
+  const link = whatsappLink(phone, adProduct.title ? `Hola, quiero ${adProduct.title}` : "Hola, vengo de redes y quiero información");
+  if (!link) return null;
+  const history = ((rows as Array<{ direction: "in" | "out"; text: string | null }> | null) ?? [])
+    .reverse().filter((m) => m.text?.trim()).map((m) => ({ from: m.direction === "in" ? "cliente" as const : "tienda" as const, text: m.text! }));
+  if (!history.length || history[history.length - 1]!.from !== "cliente") return "sin_turno";
+  return generateSocialAiReply({
+    storeName: (store as { name: string } | null)?.name ?? "la tienda",
+    platform: thread.platform, kind: thread.kind, whatsapp: link, catalog,
+    adProduct: adProduct.title ? { name: adProduct.title, price: adProduct.price } : null,
+    postText: thread.post_text, customerName: thread.participant_name, history,
+  });
+}
+
+/** El hilo con lo que necesita lo automático. */
+export async function loadAutoThread(admin: SupabaseClient, threadId: string): Promise<AutoThread | null> {
+  return loadThread(admin, threadId);
 }
 
 /** La IA: null si no pudo responder (se cae a los textos fijos); [] si decidió no responder o no le toca. */
@@ -118,25 +152,9 @@ async function runAi(admin: SupabaseClient, ev: Exclude<NormalizedEvent, { kind:
   const claimedAt = Date.parse(thread.claimed_at ?? "");
   if (thread.claimed_by && Number.isFinite(claimedAt) && Date.now() - claimedAt < HUMAN_HOLD_MS) return [];
 
-  const [{ data: store }, catalog, adProduct, { data: rows }] = await Promise.all([
-    admin.from("stores").select("name").eq("id", storeId).maybeSingle(),
-    storeCatalog(admin, storeId),
-    productForAd(admin, storeId, thread.ad_id),
-    admin.from("social_messages").select("direction,text").eq("thread_id", thread.id).neq("status", "fallo")
-      .order("occurred_at", { ascending: false }).limit(12),
-  ]);
-  const link = whatsappLink(phone, adProduct.title ? `Hola, quiero ${adProduct.title}` : "Hola, vengo de redes y quiero información");
-  if (!link) return null;
-  const history = ((rows as Array<{ direction: "in" | "out"; text: string | null }> | null) ?? [])
-    .reverse().filter((m) => m.text?.trim()).map((m) => ({ from: m.direction === "in" ? "cliente" as const : "tienda" as const, text: m.text! }));
-  if (!history.length || history[history.length - 1]!.from !== "cliente") return [];
-
-  const reply = await generateSocialAiReply({
-    storeName: (store as { name: string } | null)?.name ?? "la tienda",
-    platform: thread.platform, kind: thread.kind, whatsapp: link, catalog,
-    adProduct: adProduct.title ? { name: adProduct.title, price: adProduct.price } : null,
-    postText: thread.post_text, customerName: thread.participant_name, history,
-  });
+  const draft = await draftAiReply(admin, thread, phone);
+  if (draft === "sin_turno") return [];
+  const reply = draft;
   if (!reply) return null;
   if (reply.skip) return [];
 

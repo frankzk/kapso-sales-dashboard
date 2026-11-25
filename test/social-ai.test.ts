@@ -107,3 +107,15 @@ describe("el MOM lo cuenta", () => {
     expect(mom).toContain("ni correos, ni direcciones");
   });
 });
+
+describe("«Sugerir con IA» (borrador sin enviar)", () => {
+  it("la acción existe, no envía y usa el mismo borrador que lo automático", () => {
+    const actions = read("app/dashboard/leads/redes/actions.ts");
+    const fn = actions.slice(actions.indexOf("export async function suggestSocialReply"), actions.indexOf("export interface SocialAutoSettingsView"));
+    expect(fn).toContain("draftAiReply(");
+    expect(fn).not.toContain("sendSocial(");
+    expect(read("lib/social-auto-server.ts")).toMatch(/const draft = await draftAiReply\(admin, thread, phone\)/);
+    expect(read("components/social-inbox.tsx")).toContain("Sugerir con IA");
+    expect(read("docs/mom/master-pedidos-v1.md")).toContain("«Sugerir con IA»");
+  });
+});

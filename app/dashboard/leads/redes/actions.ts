@@ -13,6 +13,8 @@ import { dmReplyMode, isSocialPlatform, privateReplyAllowed, type NormalizedComm
 import { applySocialEvent, upsertSocialAccount } from "@/lib/social-inbox-store";
 import { sendSocial } from "@/lib/social-send";
 import { zernio, zernioConfigured, ZernioError } from "@/lib/zernio";
+import { socialAiConfigured } from "@/lib/social-ai-server";
+import { draftAiReply, loadAutoThread, storeWhatsappPhone } from "@/lib/social-auto-server";
 
 const PATH = "/dashboard/leads/redes";
 const MAX_TEXT = 1000;
@@ -255,6 +257,25 @@ export async function syncZernioInbox(): Promise<Result> {
   }
   revalidatePath(PATH);
   return { ok: true, notice: `Sincronizado: ${conversations} conversaciones y ${comments} comentarios.` };
+}
+
+/**
+ * «Sugerir con IA»: la respuesta que escribiría Claude Haiku 5.5 para este hilo,
+ * sin mandarla (la asesora la revisa y la envía). Misma regla y mismo filtro que
+ * lo automático (MOM §25.4 fase 4). Lo ve quien ve el hilo.
+ */
+export async function suggestSocialReply(threadId: string): Promise<{ ok: true; publicText: string | null; privateText: string | null } | { ok: false; error: string }> {
+  if (!socialAiConfigured()) return { ok: false, error: "Falta la clave de la IA (ANTHROPIC_API_KEY en Vercel)." };
+  const got = await sessionThread(threadId);
+  if ("error" in got) return { ok: false, error: got.error };
+  const admin = createAdminSupabase();
+  const thread = await loadAutoThread(admin, threadId);
+  if (!thread?.store_id) return { ok: false, error: "La conversación no tiene tienda." };
+  const draft = await draftAiReply(admin, thread, await storeWhatsappPhone(admin, thread.store_id));
+  if (draft === "sin_turno") return { ok: false, error: "Lo último ya lo respondió la tienda." };
+  if (!draft) return { ok: false, error: "La IA no pudo responder ahora. Inténtalo otra vez o escribe la respuesta." };
+  if (draft.skip) return { ok: false, error: "La IA no lo respondería: es solo emojis, una etiqueta o spam." };
+  return { ok: true, publicText: draft.publicText, privateText: draft.privateText };
 }
 
 export interface SocialAutoSettingsView {

@@ -17855,6 +17855,12 @@ estructurada (`lib/social-ai.ts`, `lib/social-ai-server.ts`):
   dato, no una orden para el modelo.
 - **Si la IA no responde** (sin clave, error, negativa o formato inválido) salen
   los textos fijos de la fase 3. Llaves: `ai:pub:`, `ai:priv:`, `ai:dm:`.
+- **«Sugerir con IA»** (botón en la respuesta de cada conversación, para quien
+  la ve; `suggestSocialReply`): la misma IA, la misma regla y el mismo filtro
+  escriben el borrador en el campo, **sin enviarlo**; en un comentario trae el
+  público y el privado, y cambia con «En público / Por privado». Sirve para
+  probar a Haiku con conversaciones reales antes de dejarlo solo, y para que la
+  asesora responda más rápido.
 
 Implementación: `lib/zernio.ts` (cliente), `lib/social-inbox.ts` (lectura de
 avisos y plazos de Meta, puro), `lib/zernio-signature.ts`,
