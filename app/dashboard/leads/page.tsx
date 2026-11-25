@@ -217,6 +217,10 @@ async function LeadsContent({
     routingPromise,
   ]);
   const listaNegra = await listaNegraPromise;
+  // Leads → Redes (MOM §25.4): cuántos comentarios y mensajes de redes esperan respuesta.
+  // Sin la 0354 todavía, la cuenta queda en 0 y no se muestra.
+  const { count: socialPending } = await createAdminSupabase().from("social_threads")
+    .select("id", { count: "exact", head: true }).in("store_id", scope).eq("status", "abierto").eq("last_direction", "in");
   const storeOrg = new Map(stores.map((s) => [s.id, s.org_id]));
   const markedLeads = withListaNegra(leads, listaNegra, storeOrg, (l) => l.phone);
 
@@ -250,6 +254,7 @@ async function LeadsContent({
       initialOpenNonce={typeof sp.oid === "string" ? sp.oid : null}
       currentUserId={user?.id ?? ""}
       canHoldNext={roles.includes("vendedora")}
+      socialPending={socialPending ?? 0}
       leadsComplete={leadsViewLimit(view) === null}
     />
   );

@@ -115,3 +115,50 @@ describe("el receptor y la pantalla", () => {
     expect(read("components/sidebar.tsx")).toContain('href: "/dashboard/leads/redes"');
   });
 });
+
+import { autoTexts, fillAutoText, hasBuyingIntent, whatsappLink, DEFAULT_PRIVATE_TEXT } from "@/lib/social-auto";
+
+describe("respuestas automáticas (fase 3)", () => {
+  it("detecta las preguntas de compra por palabra, sin tildes, y no los reclamos", () => {
+    expect(hasBuyingIntent("Precio?")).toBe(true);
+    expect(hasBuyingIntent("cuánto cuesta y envían a provincia")).toBe(true);
+    expect(hasBuyingIntent("Info por interno porfa 🙏")).toBe(true);
+    expect(hasBuyingIntent("Me interesa")).toBe(true);
+    expect(hasBuyingIntent("Nunca llegó mi pedido, quiero mi dinero")).toBe(false);
+    expect(hasBuyingIntent("Hermoso 😍")).toBe(false);
+    expect(hasBuyingIntent("preciosa")).toBe(false);
+    expect(hasBuyingIntent("", ["precio"])).toBe(false);
+  });
+  it("llena los datos y, si falta uno, no inventa: cae al texto sin él", () => {
+    const wa = "https://wa.me/51989256981?text=Hola";
+    expect(fillAutoText(DEFAULT_PRIVATE_TEXT, { producto: "Nattokinase", precio: 89, whatsapp: wa }))
+      .toBe(`Hola 👋 Nattokinase está a S/ 89. Escríbenos por WhatsApp y te lo enviamos: ${wa}`);
+    expect(fillAutoText(DEFAULT_PRIVATE_TEXT, { producto: "Nattokinase", precio: null, whatsapp: wa })).toBeNull();
+    expect(autoTexts({ public_text: null, private_text: null, dm_text: null }, { producto: "Nattokinase", precio: null, whatsapp: wa }).privateText)
+      .toBe(`Hola 👋 Escríbenos por WhatsApp y te contamos el precio y el envío: ${wa}`);
+    expect(autoTexts({ public_text: null, private_text: null, dm_text: null }, { whatsapp: wa, nombre: "María Torres" }).dmText)
+      .toBe(`¡Hola María! 👋 Gracias por escribirnos. Para atenderte más rápido escríbenos por WhatsApp: ${wa}`);
+    expect(autoTexts({ public_text: null, private_text: null, dm_text: null }, { whatsapp: wa }).dmText).toMatch(/^¡Hola! 👋/);
+    expect(fillAutoText("S/ {precio}", { precio: 89.9 })).toBe("S/ 89.90");
+  });
+  it("el enlace de WhatsApp de la tienda", () => {
+    expect(whatsappLink("+51 989 256 981", "Hola, quiero Nattokinase")).toBe("https://wa.me/51989256981?text=Hola%2C%20quiero%20Nattokinase");
+    expect(whatsappLink("989256981", "x")).toBe("https://wa.me/51989256981?text=x");
+    expect(whatsappLink(null, "x")).toBeNull();
+  });
+  it("lo automático corre después de responder a Zernio, una vez por comentario o conversación", () => {
+    const route = read("app/api/webhooks/zernio/route.ts");
+    expect(route).toContain("after(async () => {");
+    const auto = read("lib/social-auto-server.ts");
+    expect(auto).toContain("idempotencyKey: `auto:pub:${ev.comment.id}`");
+    expect(auto).toContain("idempotencyKey: `auto:priv:${ev.comment.id}`");
+    expect(auto).toContain("idempotencyKey: `auto:dm:${thread.id}`");
+    expect(auto).toContain("if (!settings?.enabled) return [];");
+    expect(read("db/migrations/0354_social_inbox.sql")).toContain("enabled           boolean not null default false");
+  });
+  it("abrir un hilo lo reserva 10 minutos y responder lo pide libre (fase 2)", () => {
+    const actions = read("app/dashboard/leads/redes/actions.ts");
+    expect(actions).toContain("const CLAIM_MS = 10 * 60_000;");
+    expect(actions).toContain("if (heldByOther(thread, userId)) return { ok: false, error: `La está atendiendo");
+  });
+});

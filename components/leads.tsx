@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { loadLeadStoreDistribution } from "@/lib/leads-read-client";
 import { pickDistributedLead, type LeadStoreDistribution } from "@/lib/lead-store-distribution";
 import { attributedProductHandle, productTextKey } from "@/lib/lead-products";
@@ -519,6 +520,7 @@ export function LeadsBoard({
   allStoresAvailable = false,
   canHoldNext = false,
   routingLabel,
+  socialPending = 0,
 }: {
   stores: StoreSummary[];
   /** Id de la tienda activa, o ALL_STORES cuando la vista es combinada. */
@@ -564,6 +566,8 @@ export function LeadsBoard({
   leadsComplete?: boolean;
   /** Tiene el rol `vendedora`: se le reserva su siguiente lead (MOM §11). */
   canHoldNext?: boolean;
+  /** Comentarios y mensajes de Facebook e Instagram por responder (Leads → Redes, MOM §25.4). */
+  socialPending?: number;
   routingLabel?: string;
 }) {
   const [board, setBoard] = useState({ sourceLeads: serverLeads, sourceCounts: serverCounts, leads: serverLeads, counts: serverCounts });
@@ -1846,6 +1850,11 @@ export function LeadsBoard({
               onClick={() => navigateToView(view === "yape" ? "por_llamar" : "yape")}
               hint="Pagos por verificar y envíos por agencia"
             />
+            {socialPending > 0 && (
+              <Link href="/dashboard/leads/redes" className={choiceChipClass(false)} title="Comentarios y mensajes de Facebook e Instagram por responder">
+                Redes <span className="tabular-nums">{socialPending}</span>
+              </Link>
+            )}
             <span aria-hidden className="mx-0.5 h-5 w-px shrink-0 bg-line-strong" />
             {REVIEW_VIEWS.map((v) => (
               <ChoiceChip

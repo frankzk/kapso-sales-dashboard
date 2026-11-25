@@ -85,10 +85,11 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
-### 25-11-2026 · Leads → Redes: comentarios y mensajes de Facebook e Instagram por Zernio (0354, MOM §25.4)
+### 25-11-2026 · Leads → Redes: comentarios y mensajes de Facebook e Instagram por Zernio, con reparto y respuestas automáticas (0354, MOM §25.4)
 
 **Migración `0354_social_inbox.sql`: aplicar en producción ANTES del código.** Crea `social_accounts`,
-`social_webhook_events`, `social_threads` y `social_messages` (RLS de lectura por tienda con `auth_store_ids()`;
+`social_webhook_events`, `social_threads`, `social_messages` y `social_auto_settings` (respuestas automáticas,
+apagadas por defecto) (RLS de lectura por tienda con `auth_store_ids()`;
 escritura solo del servidor). Tablas nuevas: no toca datos y se puede correr otra vez. Sin ella, Leads → Redes
 falla al leer y el webhook responde 500 (Zernio reintenta).
 
@@ -106,6 +107,9 @@ Verificar:
 2. Un comentario nuevo en la fan page aparece en «Por responder» en menos de un minuto
    (`social_webhook_events.processed_at` con `error` vacío).
 3. Responder en público y por privado desde Kapta; el mensaje sale en Facebook o Instagram.
+4. Abrir un hilo desde dos usuarios: el segundo ve «La atiende …» y no puede responder.
+5. Encender «Respuestas automáticas» de Kenku, comentar «precio» en un anuncio declarado: llega la respuesta
+   pública y el privado con producto, precio y WhatsApp (en la bandeja, «Automático»).
 
 ### 24-11-2026 · Repro Lima: «Guardar y pasar al siguiente» se queda en el siguiente (sin migración, MOM §9.5)
 

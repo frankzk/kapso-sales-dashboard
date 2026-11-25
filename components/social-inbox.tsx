@@ -7,11 +7,14 @@
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
+  claimSocialThread,
   getSocialThreadMessages,
   replySocialThread,
+  saveSocialAutoSettings,
   setSocialAccountStore,
   setSocialThreadStatus,
   syncZernioInbox,
+  type SocialAutoSettingsView,
   type SocialMessageView,
 } from "@/app/dashboard/leads/redes/actions";
 import { Badge, Banner, ChoiceChip, FIELD_BOX, OpsButton } from "@/components/ops-ui";
@@ -76,7 +79,9 @@ function personName(t: Pick<SocialThreadView, "participant_name" | "participant_
   return t.participant_name ?? (t.participant_username ? `@${t.participant_username}` : "Sin nombre");
 }
 
-export function SocialInbox({ threads, accounts, stores, canManage, configured }: {
+export function SocialInbox({ threads, accounts, stores, canManage, configured, whatsappByStore, autoSettings }: {
+  whatsappByStore: Record<string, string | null>;
+  autoSettings: SocialAutoSettingsView[];
   threads: SocialThreadView[];
   accounts: SocialAccountView[];
   stores: Array<{ id: string; name: string }>;
@@ -140,6 +145,7 @@ export function SocialInbox({ threads, accounts, stores, canManage, configured }
       )}
       {syncNotice && <Banner tone={syncNotice.ok ? "ok" : "crit"} role="status">{syncNotice.text}</Banner>}
       {canManage && unassigned.length > 0 && <UnassignedAccounts accounts={unassigned} stores={stores} onDone={() => router.refresh()} />}
+      {canManage && <AutoRepliesPanel settings={autoSettings} storeName={storeName} />}
 
       <div className="flex flex-wrap items-center gap-1.5">
         <ChoiceChip label="Por responder" count={counts.pendientes} active={status === "pendientes"} onClick={() => setStatus("pendientes")} />
@@ -195,7 +201,7 @@ export function SocialInbox({ threads, accounts, stores, canManage, configured }
 
         <section className={cn("rounded-lg bg-white shadow-card ring-1 ring-line", !selected && "hidden lg:block")} aria-label="Conversación">
           {selected ? (
-            <ThreadPanel key={selected.id} thread={selected} storeName={selected.store_id ? storeName.get(selected.store_id) ?? null : null} onBack={() => setSelectedId(null)} onChanged={() => router.refresh()} />
+            <ThreadPanel key={selected.id} thread={selected} storeName={selected.store_id ? storeName.get(selected.store_id) ?? null : null} whatsapp={selected.store_id ? whatsappByStore[selected.store_id] ?? null : null} onBack={() => setSelectedId(null)} onChanged={() => router.refresh()} />
           ) : (
             <div className="flex h-full min-h-[40vh] flex-col items-center justify-center gap-2 p-8 text-center text-sm text-ink-500">
               <IconChat className="size-6 text-ink-400" />
@@ -216,7 +222,14 @@ function Avatar({ name, picture }: { name: string; picture: string | null }) {
   return <span aria-hidden className="grid size-9 shrink-0 place-items-center rounded-full bg-line text-sm font-semibold text-ink-600">{name.replace(/^@/, "").slice(0, 1).toUpperCase()}</span>;
 }
 
-function ThreadPanel({ thread, storeName, onBack, onChanged }: { thread: SocialThreadView; storeName: string | null; onBack: () => void; onChanged: () => void }) {
+function ThreadPanel({ thread, storeName, whatsapp, onBack, onChanged }: { thread: SocialThreadView; storeName: string | null; whatsapp: string | null; onBack: () => void; onChanged: () => void }) {
+  const [hold, setHold] = useState<{ mine: boolean; heldBy: string | null; until: string | null } | null>(null);
+  // Abrir el hilo lo reserva 10 minutos (fase 2); otra asesora lo ve tomado.
+  useEffect(() => {
+    let alive = true;
+    void claimSocialThread(thread.id).then((res) => { if (alive && res.ok) setHold(res); });
+    return () => { alive = false; };
+  }, [thread.id]);
   const [messages, setMessages] = useState<SocialMessageView[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [text, setText] = useState("");
@@ -236,7 +249,8 @@ function ThreadPanel({ thread, storeName, onBack, onChanged }: { thread: SocialT
   const firstInbound = messages?.find((m) => m.direction === "in")?.occurredAt ?? null;
   const replyWindow = thread.kind === "dm" ? dmReplyMode(thread.last_inbound_at) : null;
   const canPrivate = thread.kind === "comment" && privateReplyAllowed(thread, firstInbound ?? thread.created_at);
-  const blocked = thread.kind === "dm" && replyWindow === "cerrado";
+  const heldElsewhere = Boolean(hold && !hold.mine);
+  const blocked = (thread.kind === "dm" && replyWindow === "cerrado") || heldElsewhere;
 
   function send() {
     setFeedback(null);
@@ -314,7 +328,9 @@ function ThreadPanel({ thread, storeName, onBack, onChanged }: { thread: SocialT
         {thread.kind === "dm" && replyWindow === "humano" && (
           <p className="text-xs text-warn-fg">Pasaron más de 24 h desde su último mensaje: se envía como respuesta de una persona (Meta lo permite hasta 7 días).</p>
         )}
-        {blocked && <p className="text-xs text-crit-fg">Pasaron más de 7 días desde su último mensaje: Meta no deja escribirle hasta que vuelva a escribir.</p>}
+        {heldElsewhere && hold && <p className="text-xs text-warn-fg">La atiende {hold.heldBy}{hold.until ? ` · se libera a las ${when(hold.until)} si no hay actividad` : ""}.</p>}
+        {hold?.mine && hold.until && <p className="text-xs text-ink-500">La atiendes tú · se libera a las {when(hold.until)} si no hay actividad.</p>}
+        {thread.kind === "dm" && replyWindow === "cerrado" && <p className="text-xs text-crit-fg">Pasaron más de 7 días desde su último mensaje: Meta no deja escribirle hasta que vuelva a escribir.</p>}
         {mode === "private" && <p className="text-xs text-ink-500">Llega a su bandeja de mensajes. En Instagram, si no te sigue, manda solo texto.</p>}
         <div className="flex items-end gap-2">
           <label className="min-w-0 flex-1">
@@ -332,6 +348,15 @@ function ThreadPanel({ thread, storeName, onBack, onChanged }: { thread: SocialT
           </label>
           <OpsButton variant="primary" onClick={send} disabled={sending || blocked || !text.trim()}>{sending ? "Enviando…" : "Enviar"}</OpsButton>
         </div>
+        {whatsapp && !blocked && (
+          <button
+            type="button"
+            onClick={() => setText(`¡Hola${thread.participant_name ? ` ${thread.participant_name.split(/\s+/)[0]}` : ""}! Para atenderte mejor escríbenos por WhatsApp 👉 ${whatsapp}`)}
+            className="text-xs font-medium text-brand-700 hover:underline"
+          >
+            Pasar a WhatsApp
+          </button>
+        )}
         {feedback && <p role="status" className={cn("text-xs", feedback.ok ? "text-ok-fg" : "text-crit-fg")}>{feedback.text}</p>}
       </div>
     </div>
@@ -392,5 +417,73 @@ function UnassignedAccounts({ accounts, stores, onDone }: { accounts: SocialAcco
       </ul>
       {error && <p className="mt-1 text-crit-fg">{error}</p>}
     </Banner>
+  );
+}
+
+function AutoRepliesPanel({ settings, storeName }: { settings: SocialAutoSettingsView[]; storeName: Map<string, string> }) {
+  const [open, setOpen] = useState(false);
+  const on = settings.filter((s) => s.enabled).length;
+  return (
+    <section className="rounded-lg bg-white shadow-card ring-1 ring-line">
+      <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left">
+        <span>
+          <span className="text-sm font-semibold text-ink-900">Respuestas automáticas</span>
+          <span className="ml-2 text-xs text-ink-500">{on ? `Encendidas en ${on} de ${settings.length} tiendas` : "Apagadas"}</span>
+        </span>
+        <span className="text-xs font-medium text-brand-700">{open ? "Cerrar" : "Configurar"}</span>
+      </button>
+      {open && (
+        <div className="space-y-4 border-t border-line px-4 py-4">
+          <p className="text-[13px] leading-5 text-ink-600">
+            A un comentario con palabras de compra se le responde en público y por privado con el producto del anuncio, su precio y el WhatsApp de la tienda.
+            Al primer mensaje directo, un saludo con el WhatsApp. Lo demás va a las asesoras. Datos: <code>{"{producto}"}</code>, <code>{"{precio}"}</code>,
+            <code>{" {whatsapp}"}</code>, <code>{"{nombre}"}</code>. Si falta el producto o el precio, el privado sale sin ellos.
+          </p>
+          {settings.map((s) => <AutoStoreForm key={s.storeId} initial={s} name={storeName.get(s.storeId) ?? "Tienda"} />)}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function AutoStoreForm({ initial, name }: { initial: SocialAutoSettingsView; name: string }) {
+  const [form, setForm] = useState(initial);
+  const [pending, start] = useTransition();
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const set = (patch: Partial<SocialAutoSettingsView>) => setForm((f) => ({ ...f, ...patch }));
+  const area = cn(FIELD_BOX, "w-full px-3 py-2 leading-5");
+  return (
+    <form
+      className="space-y-2 rounded-md bg-wash p-3"
+      onSubmit={(e) => {
+        e.preventDefault();
+        setMsg(null);
+        start(async () => {
+          const res = await saveSocialAutoSettings(form);
+          setMsg(res.ok ? { ok: true, text: res.notice ?? "Guardado." } : { ok: false, text: res.error });
+        });
+      }}
+    >
+      <label className="flex items-center gap-2 text-sm font-medium text-ink-900">
+        <input type="checkbox" className="size-4 accent-brand-600" checked={form.enabled} onChange={(e) => set({ enabled: e.currentTarget.checked })} />
+        {name}: responder solo
+      </label>
+      <label className="block text-xs font-medium text-ink-700">Palabras de compra (separadas por coma)
+        <textarea rows={2} className={area} value={form.keywords} onChange={(e) => set({ keywords: e.currentTarget.value })} />
+      </label>
+      <label className="block text-xs font-medium text-ink-700">Respuesta pública al comentario
+        <textarea rows={1} className={area} value={form.publicText} onChange={(e) => set({ publicText: e.currentTarget.value })} />
+      </label>
+      <label className="block text-xs font-medium text-ink-700">Mensaje por privado al comentario
+        <textarea rows={2} className={area} value={form.privateText} onChange={(e) => set({ privateText: e.currentTarget.value })} />
+      </label>
+      <label className="block text-xs font-medium text-ink-700">Saludo al primer mensaje directo
+        <textarea rows={2} className={area} value={form.dmText} onChange={(e) => set({ dmText: e.currentTarget.value })} />
+      </label>
+      <div className="flex items-center gap-3">
+        <OpsButton type="submit" size="sm" variant="primary" disabled={pending}>{pending ? "Guardando…" : "Guardar"}</OpsButton>
+        {msg && <span role="status" className={cn("text-xs", msg.ok ? "text-ok-fg" : "text-crit-fg")}>{msg.text}</span>}
+      </div>
+    </form>
   );
 }

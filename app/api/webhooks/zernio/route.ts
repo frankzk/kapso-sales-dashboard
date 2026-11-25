@@ -1,8 +1,9 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { after, NextResponse, type NextRequest } from "next/server";
 import { createAdminSupabase } from "@/lib/db";
 import { normalizeZernioEvent } from "@/lib/social-inbox";
 import { verifyZernioSignature } from "@/lib/zernio-signature";
 import { applySocialEvent } from "@/lib/social-inbox-store";
+import { runSocialAutoReplies } from "@/lib/social-auto-server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -48,8 +49,18 @@ export async function POST(req: NextRequest) {
   try {
     const normalized = normalizeZernioEvent(payload);
     if (normalized) {
-      await applySocialEvent(admin, normalized);
+      const threadId = await applySocialEvent(admin, normalized);
       outcome = "applied";
+      // Las respuestas automáticas (fase 3) van DESPUÉS de responder: Zernio pide un 2xx en 5 s.
+      if (threadId) {
+        after(async () => {
+          try {
+            await runSocialAutoReplies(createAdminSupabase(), normalized, threadId);
+          } catch (e) {
+            await createAdminSupabase().from("social_webhook_events").update({ error: `auto: ${e instanceof Error ? e.message : String(e)}` }).eq("event_id", eventId);
+          }
+        });
+      }
     }
   } catch (e) {
     failure = e instanceof Error ? e.message : String(e);

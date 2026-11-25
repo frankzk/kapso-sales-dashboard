@@ -17673,7 +17673,7 @@ recibir, guardar y responder; **2)** reparto (reserva de 10 minutos como Leads)
 y «Pasar a WhatsApp»; **3)** respuestas automáticas. Los comentarios negativos
 quedan visibles: los atiende la asesora; Kapta no oculta nada solo.
 
-**Fase 1 (esta).**
+**Fase 1: recibir, guardar y responder.**
 
 - **Cómo llega.** Zernio avisa a `/api/webhooks/zernio` cada mensaje directo
   (`message.received`, `message.sent`) y cada comentario (`comment.received`),
@@ -17711,11 +17711,49 @@ quedan visibles: los atiende la asesora; Kapta no oculta nada solo.
   Messenger e Instagram rechazan las respuestas: «Otra app tiene esta
   conversación»).
 
+**Fase 2: reparto y paso a WhatsApp.**
+
+- **Abrir un hilo lo reserva 10 minutos** para quien lo abrió, como «Tomar» en
+  Leads (`claimSocialThread`): otra asesora lo ve «La atiende …» y no puede
+  responder; responder renueva la reserva; sin actividad se libera sola.
+- **«Pasar a WhatsApp»** llena la respuesta con el enlace `wa.me` del WhatsApp
+  principal de la tienda (`stores.whatsapp_phone_number_id`: Kenku 981, Aurela
+  327) y el nombre de la clienta; la asesora lo revisa y lo envía.
+- **En Leads**, la píldora «Redes N» lleva a la bandeja cuando hay comentarios o
+  mensajes por responder.
+
+**Fase 3: respuestas automáticas (`lib/social-auto.ts`).** Nacen **apagadas**:
+las enciende por tienda quien gestiona tiendas en Leads → Redes → «Respuestas
+automáticas» (`social_auto_settings`), con sus textos y palabras.
+
+- **Comentario de una clienta con palabras de compra** («precio», «cuánto»,
+  «info», «envío», «provincia», «me interesa», «interno»…; por palabra entera y
+  sin tildes; no «quiero» ni «pedido», que también usa un reclamo): respuesta
+  pública «¡Te escribimos por interno! 💬» y por privado «Hola 👋 {producto} está
+  a S/ {precio}. Escríbenos por WhatsApp y te lo enviamos: {whatsapp}» (textos
+  aprobados por el owner el 25-11-2026). El producto es el declarado para ese
+  anuncio en «Producto por anuncio»; el precio, el de WooCommerce en vivo. **Si
+  falta el producto o el precio, no se inventa**: sale «Hola 👋 Escríbenos por
+  WhatsApp y te contamos el precio y el envío: {whatsapp}». Solo el comentario
+  principal, nunca las respuestas ni lo nuestro.
+- **Primer mensaje directo de una conversación** (sin otra respuesta antes):
+  «¡Hola {nombre}! 👋 Gracias por escribirnos. Para atenderte más rápido
+  escríbenos por WhatsApp: {whatsapp}», siempre dentro de las 24 h (es la
+  respuesta a lo que acaba de escribir) y nunca con la etiqueta de persona.
+- **El resto va a las asesoras**: quejas, preguntas raras y comentarios
+  negativos no se contestan ni se ocultan solos.
+- **Una sola vez**: cada respuesta lleva una llave fija por comentario o
+  conversación (`auto:pub:`, `auto:priv:`, `auto:dm:`), única en
+  `social_messages`, y la misma va a Zernio como `Idempotency-Key`. Corre después
+  de responder al aviso (`after()`), porque Zernio pide un 2xx en 5 segundos. En
+  la bandeja se lee «Automático».
+
 Implementación: `lib/zernio.ts` (cliente), `lib/social-inbox.ts` (lectura de
 avisos y plazos de Meta, puro), `lib/zernio-signature.ts`,
-`lib/social-inbox-store.ts`, `app/api/webhooks/zernio/route.ts`,
-`app/dashboard/leads/redes/` y `components/social-inbox.tsx`. Pruebas:
-`test/social-inbox.test.ts`.
+`lib/social-inbox-store.ts`, `lib/social-send.ts` (el envío, manual o
+automático), `lib/social-auto.ts` y `lib/social-auto-server.ts`,
+`app/api/webhooks/zernio/route.ts`, `app/dashboard/leads/redes/` y
+`components/social-inbox.tsx`. Pruebas: `test/social-inbox.test.ts`.
 
 ## 26. Costo de producto (COGS)
 

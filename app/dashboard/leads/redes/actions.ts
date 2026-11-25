@@ -10,7 +10,8 @@ import { revalidatePath } from "next/cache";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { dmReplyMode, isSocialPlatform, privateReplyAllowed, type NormalizedComment, type NormalizedDm } from "@/lib/social-inbox";
-import { applySocialEvent, insertSocialMessage, refreshThreadSummary, upsertSocialAccount } from "@/lib/social-inbox-store";
+import { applySocialEvent, upsertSocialAccount } from "@/lib/social-inbox-store";
+import { sendSocial } from "@/lib/social-send";
 import { zernio, zernioConfigured, ZernioError } from "@/lib/zernio";
 
 const PATH = "/dashboard/leads/redes";
@@ -35,6 +36,21 @@ type Result = { ok: true; notice?: string } | { ok: false; error: string };
 interface ThreadRow {
   id: string; store_id: string | null; account_id: string; platform: string; kind: "dm" | "comment";
   external_id: string; post_id: string | null; last_inbound_at: string | null; private_reply_at: string | null; created_at: string;
+  claimed_by: string | null; claimed_at: string | null;
+}
+
+/** La reserva de un hilo: 10 minutos, como «Tomar» en Leads (fase 2). */
+const CLAIM_MS = 10 * 60_000;
+
+function heldByOther(thread: Pick<ThreadRow, "claimed_by" | "claimed_at">, userId: string, now = Date.now()): boolean {
+  const at = Date.parse(thread.claimed_at ?? "");
+  return Boolean(thread.claimed_by && thread.claimed_by !== userId && Number.isFinite(at) && now - at < CLAIM_MS);
+}
+
+async function userName(userId: string): Promise<string> {
+  const { data } = await createAdminSupabase().auth.admin.getUserById(userId);
+  const meta = (data?.user?.user_metadata ?? {}) as { full_name?: string; name?: string };
+  return meta.full_name ?? meta.name ?? data?.user?.email?.split("@")[0] ?? "otra asesora";
 }
 
 async function sessionThread(threadId: string): Promise<{ thread: ThreadRow; userId: string } | { error: string }> {
@@ -42,24 +58,10 @@ async function sessionThread(threadId: string): Promise<{ thread: ThreadRow; use
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return { error: "Tu sesión venció. Vuelve a entrar." };
   const { data } = await sb.from("social_threads")
-    .select("id,store_id,account_id,platform,kind,external_id,post_id,last_inbound_at,private_reply_at,created_at")
+    .select("id,store_id,account_id,platform,kind,external_id,post_id,last_inbound_at,private_reply_at,created_at,claimed_by,claimed_at")
     .eq("id", threadId).maybeSingle();
   if (!data) return { error: "No tienes acceso a esta conversación." };
   return { thread: data as ThreadRow, userId: user.id };
-}
-
-/** Lo que dice la pantalla cuando Zernio o Meta rechazan un envío. */
-function sendErrorText(e: unknown): string {
-  if (e instanceof ZernioError) {
-    const details = (e.details ?? {}) as { privateReplyConsumed?: boolean };
-    if (details.privateReplyConsumed) return "Ese comentario ya usó su única respuesta por privado. Contesta en público o en el chat.";
-    if (e.code === "not_thread_owner") return "Otra app tiene esta conversación (la bandeja de Meta). En Meta Business Suite pon a Zernio como app principal de las conversaciones.";
-    if (e.code === "message_allowance_exceeded") return "Se acabaron los 10,000 mensajes gratis del mes en Zernio: agrega una tarjeta en Zernio.";
-    if (e.code === "not_configured") return e.message;
-    if (e.status === 429) return "Zernio pidió esperar unos segundos. Vuelve a intentarlo.";
-    return `Zernio no lo envió: ${e.message}`;
-  }
-  return `No se pudo enviar: ${e instanceof Error ? e.message : String(e)}`;
 }
 
 export async function getSocialThreadMessages(threadId: string): Promise<{ messages: SocialMessageView[] } | { error: string }> {
@@ -110,6 +112,7 @@ export async function replySocialThread(threadId: string, rawText: string, mode:
   const { thread, userId } = got;
   const admin = createAdminSupabase();
 
+  if (heldByOther(thread, userId)) return { ok: false, error: `La está atendiendo ${await userName(thread.claimed_by!)}. Se libera a los 10 minutos sin actividad.` };
   if (thread.kind === "dm" && mode !== "dm") return { ok: false, error: "En un mensaje directo se responde por el chat." };
   if (thread.kind === "comment" && mode === "dm") return { ok: false, error: "Elige si respondes en público o por privado." };
 
@@ -126,47 +129,41 @@ export async function replySocialThread(threadId: string, rawText: string, mode:
     }
   }
 
-  const idempotencyKey = randomUUID();
-  const channel = mode === "dm" ? "dm" : mode === "public" ? "comment_public" : "comment_private";
-  const { data: pending, error: pendingError } = await admin.from("social_messages").insert({
-    thread_id: thread.id, store_id: thread.store_id, direction: "out", channel, external_id: null, text,
-    sent_by: userId, via: "kapta", occurred_at: new Date().toISOString(), idempotency_key: idempotencyKey, status: "enviando",
-  }).select("id").single();
-  if (pendingError || !pending) return { ok: false, error: "No se pudo registrar la respuesta." };
-  const rowId = (pending as { id: string }).id;
-
-  try {
-    let externalId: string | null = null;
-    if (mode === "dm") {
-      const res = await zernio.sendMessage(thread.external_id, { accountId: thread.account_id, message: text, humanAgent }, idempotencyKey);
-      externalId = res.data?.messageId ?? res.data?.messageIds?.[0] ?? null;
-    } else if (mode === "public") {
-      if (!thread.post_id) throw new Error("El comentario no tiene su post: sincroniza las redes y vuelve a intentarlo.");
-      const res = await zernio.replyToComment(thread.post_id, { accountId: thread.account_id, commentId: thread.external_id, message: text }, idempotencyKey);
-      externalId = res.data?.commentId ?? null;
-    } else {
-      if (!thread.post_id) throw new Error("El comentario no tiene su post: sincroniza las redes y vuelve a intentarlo.");
-      const res = await zernio.privateReply(thread.post_id, thread.external_id, { accountId: thread.account_id, message: text });
-      externalId = res.messageId ?? null;
-      await admin.from("social_threads").update({ private_reply_at: new Date().toISOString() }).eq("id", thread.id);
-    }
-    // Si el aviso de Zernio de este mismo envío llegó antes, ya hay una fila con ese id: se deja la nuestra sin id.
-    const { error: upErr } = await admin.from("social_messages").update({ status: "ok", external_id: externalId }).eq("id", rowId);
-    if (upErr) await admin.from("social_messages").update({ status: "ok" }).eq("id", rowId);
-  } catch (e) {
-    const message = sendErrorText(e);
-    await admin.from("social_messages").update({ status: "fallo", error: message }).eq("id", rowId);
-    // El único privado que Meta permite ya se gastó: se marca para no ofrecerlo otra vez.
-    if (e instanceof ZernioError && (e.details as { privateReplyConsumed?: boolean } | null)?.privateReplyConsumed) {
-      await admin.from("social_threads").update({ private_reply_at: new Date().toISOString() }).eq("id", thread.id);
-    }
-    await refreshThreadSummary(admin, thread.id);
-    revalidatePath(PATH);
-    return { ok: false, error: message };
-  }
-  await refreshThreadSummary(admin, thread.id);
+  const res = await sendSocial(admin, thread, { text, mode, userId, via: "kapta", idempotencyKey: randomUUID(), humanAgent });
+  // Responder renueva la reserva: la conversación sigue siendo de quien la atiende.
+  await admin.from("social_threads").update({ claimed_by: userId, claimed_at: new Date().toISOString() }).eq("id", thread.id);
   revalidatePath(PATH);
+  if (!res.ok) return { ok: false, error: res.error };
   return { ok: true, notice: mode === "private" ? "Enviado por privado." : "Enviado." };
+}
+
+/**
+ * Abrir un hilo lo reserva 10 minutos para quien lo abrió (fase 2), como
+ * «Tomar» en Leads: otra asesora lo ve con «Lo atiende …» y no puede responder.
+ * Pasados los 10 minutos sin actividad, se libera solo.
+ */
+export async function claimSocialThread(threadId: string): Promise<{ ok: true; mine: boolean; heldBy: string | null; until: string | null } | { ok: false; error: string }> {
+  const got = await sessionThread(threadId);
+  if ("error" in got) return { ok: false, error: got.error };
+  const { thread, userId } = got;
+  if (heldByOther(thread, userId)) {
+    return { ok: true, mine: false, heldBy: await userName(thread.claimed_by!), until: new Date(Date.parse(thread.claimed_at!) + CLAIM_MS).toISOString() };
+  }
+  const now = new Date();
+  const admin = createAdminSupabase();
+  // Solo si sigue libre (o es suyo): dos asesoras abriendo a la vez no se pisan.
+  const { data } = await admin.from("social_threads").update({ claimed_by: userId, claimed_at: now.toISOString() })
+    .eq("id", thread.id).or(`claimed_by.is.null,claimed_by.eq.${userId},claimed_at.lt.${new Date(now.getTime() - CLAIM_MS).toISOString()}`)
+    .select("id");
+  if (!data?.length) {
+    // Otra asesora la tomó en el mismo instante: se dice quién (una sola relectura, sin bucle).
+    const again = await sessionThread(threadId);
+    if ("thread" in again && heldByOther(again.thread, userId)) {
+      return { ok: true, mine: false, heldBy: await userName(again.thread.claimed_by!), until: new Date(Date.parse(again.thread.claimed_at!) + CLAIM_MS).toISOString() };
+    }
+    return { ok: false, error: "No se pudo reservar la conversación. Vuelve a abrirla." };
+  }
+  return { ok: true, mine: true, heldBy: null, until: new Date(now.getTime() + CLAIM_MS).toISOString() };
 }
 
 /** Cerrar (no necesita respuesta) o reabrir un hilo. */
@@ -258,4 +255,37 @@ export async function syncZernioInbox(): Promise<Result> {
   }
   revalidatePath(PATH);
   return { ok: true, notice: `Sincronizado: ${conversations} conversaciones y ${comments} comentarios.` };
+}
+
+export interface SocialAutoSettingsView {
+  storeId: string;
+  enabled: boolean;
+  keywords: string;
+  publicText: string;
+  privateText: string;
+  dmText: string;
+}
+
+/** Guarda las respuestas automáticas de una tienda (fase 3). Pide «Tiendas». Vacío = el texto por defecto. */
+export async function saveSocialAutoSettings(input: SocialAutoSettingsView): Promise<Result> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("stores.manage")) return { ok: false, error: "Solo quien gestiona las tiendas cambia las respuestas automáticas." };
+  const sb = await createServerSupabase();
+  const { data: { user } } = await sb.auth.getUser();
+  if (!user) return { ok: false, error: "Tu sesión venció. Vuelve a entrar." };
+  const { data: store } = await sb.from("stores").select("id").eq("id", input.storeId).maybeSingle();
+  if (!store) return { ok: false, error: "No tienes acceso a esa tienda." };
+  const clean = (t: string, max: number) => t.trim().slice(0, max) || null;
+  for (const [label, t] of [["público", input.publicText], ["privado", input.privateText], ["mensaje directo", input.dmText]] as const) {
+    if (t.length > 640) return { ok: false, error: `El texto ${label} pasa de 640 caracteres.` };
+  }
+  const keywords = input.keywords.split(/[,\n]/).map((k) => k.trim()).filter(Boolean).slice(0, 80);
+  const { error } = await createAdminSupabase().from("social_auto_settings").upsert({
+    store_id: input.storeId, enabled: input.enabled, comment_keywords: keywords.length ? keywords : null,
+    public_text: clean(input.publicText, 640), private_text: clean(input.privateText, 640), dm_text: clean(input.dmText, 640),
+    updated_by: user.id, updated_at: new Date().toISOString(),
+  }, { onConflict: "store_id" });
+  if (error) return { ok: false, error: "No se pudo guardar." };
+  revalidatePath(PATH);
+  return { ok: true, notice: input.enabled ? "Respuestas automáticas encendidas." : "Respuestas automáticas apagadas." };
 }

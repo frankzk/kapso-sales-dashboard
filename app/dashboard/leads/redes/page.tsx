@@ -3,6 +3,8 @@ import { getAccessibleStores } from "@/lib/access";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { zernioConfigured } from "@/lib/zernio";
+import { loadAutoSettings, storeWhatsappPhone } from "@/lib/social-auto-server";
+import { DEFAULT_COMMENT_KEYWORDS, DEFAULT_DM_TEXT, DEFAULT_PRIVATE_TEXT, DEFAULT_PUBLIC_TEXT, whatsappLink } from "@/lib/social-auto";
 import { EmptyState } from "@/components/ui";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 import { SocialInbox, type SocialAccountView, type SocialThreadView } from "@/components/social-inbox";
@@ -33,8 +35,27 @@ async function RedesContent() {
       ? createAdminSupabase().from("social_accounts").select("account_id,store_id,platform,username,display_name,active")
       : sb.from("social_accounts").select("account_id,store_id,platform,username,display_name,active"),
   ]);
+  // El WhatsApp de cada tienda (para «Pasar a WhatsApp») y sus respuestas automáticas.
+  const admin = createAdminSupabase();
+  const perStore = await Promise.all(stores.map(async (s) => {
+    const [phone, auto] = await Promise.all([storeWhatsappPhone(admin, s.id), loadAutoSettings(admin, s.id)]);
+    return {
+      storeId: s.id,
+      whatsapp: whatsappLink(phone, "Hola, vengo de redes y quiero información"),
+      auto: {
+        storeId: s.id,
+        enabled: auto?.enabled ?? false,
+        keywords: (auto?.comment_keywords?.length ? auto.comment_keywords : DEFAULT_COMMENT_KEYWORDS).join(", "),
+        publicText: auto?.public_text ?? DEFAULT_PUBLIC_TEXT,
+        privateText: auto?.private_text ?? DEFAULT_PRIVATE_TEXT,
+        dmText: auto?.dm_text ?? DEFAULT_DM_TEXT,
+      },
+    };
+  }));
   return (
     <SocialInbox
+      whatsappByStore={Object.fromEntries(perStore.map((p) => [p.storeId, p.whatsapp]))}
+      autoSettings={perStore.map((p) => p.auto)}
       threads={(threads ?? []) as SocialThreadView[]}
       accounts={(accounts ?? []) as SocialAccountView[]}
       stores={stores.map((s) => ({ id: s.id, name: s.name }))}

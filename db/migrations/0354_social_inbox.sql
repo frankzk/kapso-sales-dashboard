@@ -6,8 +6,8 @@
 -- Los comentarios de la fan page y de Instagram, Messenger y los mensajes
 -- directos de Instagram llegan por Zernio (zernio.com, la API sobre la de
 -- Meta). Kapta guarda su copia para que las asesoras lean y respondan desde
--- Leads → Redes. Fase 1: recibir, guardar y responder; el reparto y las
--- respuestas automáticas vienen después y usan estas mismas tablas.
+-- Leads → Redes: recibir, guardar y responder (fase 1), reservar el hilo 10
+-- minutos y «Pasar a WhatsApp» (fase 2) y responder solo (fase 3).
 --
 --   * `social_accounts`: cada cuenta conectada en Zernio (una fan page o un
 --     Instagram) y la tienda de Kapta a la que pertenece.
@@ -103,7 +103,25 @@ create unique index if not exists social_messages_external_uniq on social_messag
 create unique index if not exists social_messages_idem_uniq on social_messages (idempotency_key) where idempotency_key is not null;
 create index if not exists social_messages_thread_idx on social_messages (thread_id, occurred_at);
 
+-- Respuestas automáticas por tienda (fase 3). Nace apagada: la enciende quien
+-- gestiona la tienda en Leads → Redes. Textos con {producto}, {precio},
+-- {whatsapp} y {nombre}; vacío = el texto por defecto de lib/social-auto.ts.
+create table if not exists social_auto_settings (
+  store_id          uuid primary key references stores(id) on delete cascade,
+  enabled           boolean not null default false,
+  comment_keywords  text[],
+  public_text       text,
+  private_text      text,
+  dm_text           text,
+  updated_by        uuid references auth.users(id) on delete set null,
+  updated_at        timestamptz not null default now()
+);
+
 alter table social_accounts enable row level security;
+alter table social_auto_settings enable row level security;
+drop policy if exists social_auto_settings_select on social_auto_settings;
+create policy social_auto_settings_select on social_auto_settings for select to authenticated
+  using (store_id in (select auth_store_ids()));
 alter table social_webhook_events enable row level security;
 alter table social_threads enable row level security;
 alter table social_messages enable row level security;
