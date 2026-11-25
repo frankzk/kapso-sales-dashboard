@@ -252,3 +252,62 @@ Aplica al Master, Courier, Envíos y Consolidado.
   tablero y la ficha.
 - Varias afirmaciones sobre cómo se comporta Next.js al revalidar salen del
   código y su documentación, no de una prueba.
+
+## 7. Avance (25-11-2026)
+
+El owner aprobó la fase 0, los cambios 1, 2 y 6 de la fase 1, y dos de las
+decisiones: Leads cada 5 minutos y comprobantes cada 5 (no cada 10).
+
+### Hecho
+
+| Qué | Antes | Ahora |
+|---|---|---|
+| Repro Lima: abrir una ficha | Una lectura entera de la pantalla | Ninguna |
+| Repro Lima: cerrar una ficha | Una lectura entera | Ninguna |
+| Repro Lima: guardar una llamada | Tres lecturas enteras | Una |
+| Repro Lima: «Programar», «No se entregó» y la guía rápida de la fila | Dos lecturas | Una |
+| Aliclik: guías entregadas sin cambios | Se reescribían y recalculaban su pedido cada 20 minutos | Solo se anota que se leyeron |
+| Leads: recarga del tablero | Cada 2 minutos | Cada 5; lo urgente, al momento |
+| Foto de pedidos para boletas | Cada 2 minutos | Cada 5 |
+| Medición | Solo Repro Lima | También Leads, Master, Courier y Envíos |
+
+**Aliclik, confirmado con datos.** La causa era la que se sospechaba: la fecha
+de cierre se comparaba como texto y los dos formatos nunca coincidían. Medido
+el 25-11: 247.723 reescrituras en 10 días, unas 23.800 al día, cerca del 83 %
+de los recálculos del Master. De las 735 guías entregadas de la ventana, en
+tres horas se recalcularon los 735 pedidos y cambiaron 3.
+
+**Cuánto mejora.** No está medido todavía: los cambios no están en producción.
+Con la medición puesta, al día siguiente de desplegar se puede comparar contra
+las 1.056 lecturas de Repro Lima del 24-11 y los 28.763 recálculos diarios.
+
+### Lo que no entró del cambio 2
+
+«Una sola recarga por guardado» quedó hecho en Repro Lima. Falta en:
+- **Master, Courier y Despacho.** Cada acción de la ficha del pedido recarga
+  la pantalla de atrás dos veces. Hay que revisar acción por acción cuáles ya
+  la traen en su respuesta; con la medición nueva se sabrá cuáles pesan.
+- **Los lotes de Repro Lima** («Programar» y «Aprobar» elegidos): leen la
+  pantalla una vez por pedido. Con 30 pedidos son 30 lecturas. Necesita que el
+  lote entero vaya en una sola llamada.
+
+### Hallazgos nuevos
+
+1. **El cierre de Aliclik toca guías que no cambiaron** (casi seguro; falta
+   confirmarlo). Cada 20 minutos anota en unas 130 guías que las revisó
+   (`aliclik_followup_at`, `reason_probed_at`). La base cuenta eso como un
+   cambio de la guía, el Master recalcula el pedido y todas las pestañas del
+   Master se recargan. Medido: 828 guías no entregadas tocadas en tres horas,
+   en los minutos 10, 30 y 50, con 6 eventos reales. Se arregla con una
+   migración corta (la misma regla de la 0204), que se aplica a mano.
+2. **La foto de pedidos para boletas ya no tiene qué fotografiar.** La última
+   es del 04-11-2026 y los 2.039 pedidos de la última semana son de
+   WooCommerce, que no llevan foto. El cron sigue preguntando a la base. Se
+   podría apagar; es decisión del owner (MOM §35.10).
+
+### Siguiente paso propuesto
+
+1. Desplegar y medir un día.
+2. La migración del hallazgo 1.
+3. Con los tiempos reales de Leads y del Master, elegir entre los cambios 3,
+   4, 5 y 9 de la fase 1.
