@@ -122,6 +122,8 @@ export function navItems(
   const items: NavItem[] = [
     ...(access.reports ? [{ href: "/dashboard", label: "Consolidado", icon: IconGrid }] : []),
     { href: "/dashboard/leads", label: "Leads", icon: IconChat },
+    // Comentarios y mensajes directos de Facebook e Instagram, por Zernio (MOM §25.4).
+    { href: "/dashboard/leads/redes", label: "Redes (FB / IG)", icon: IconChat },
     { href: "/dashboard/pedidos", label: "Master de Pedidos", icon: IconClipboard },
     PREPAY_LIST_ITEM,
     PAGO_DIFERENCIA_ITEM,

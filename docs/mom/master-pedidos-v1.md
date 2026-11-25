@@ -17662,6 +17662,61 @@ Implementación: `lib/lista-negra.ts` (`withListaNegra`, `listaNegraMergeMarks`)
 `app/dashboard/leads/prepay-actions.ts`. Pruebas: `test/lista-negra.test.ts` y
 `test/prepay-gates.test.ts`.
 
+### 25.4 Leads → Redes: comentarios y mensajes de Facebook e Instagram (25-11-2026)
+
+**Decisión del owner (25-11-2026).** Las asesoras leen y responden desde Kapta,
+dentro de Leads, los **comentarios de la fan page**, **Messenger**, los
+**comentarios de Instagram** y los **mensajes directos de Instagram** de cada
+tienda, con respuestas automáticas. Llegan por **Zernio** (zernio.com), la API
+sobre la de Meta; Kenku se conectó primero. Se construye por fases: **1)**
+recibir, guardar y responder; **2)** reparto (reserva de 10 minutos como Leads)
+y «Pasar a WhatsApp»; **3)** respuestas automáticas. Los comentarios negativos
+quedan visibles: los atiende la asesora; Kapta no oculta nada solo.
+
+**Fase 1 (esta).**
+
+- **Cómo llega.** Zernio avisa a `/api/webhooks/zernio` cada mensaje directo
+  (`message.received`, `message.sent`) y cada comentario (`comment.received`),
+  y cuando una cuenta se conecta o desconecta. La firma `X-Zernio-Signature`
+  (HMAC-SHA256 del cuerpo crudo con `ZERNIO_WEBHOOK_SECRET`) se verifica antes de
+  leer nada; cada aviso se guarda una vez por su `id` (`social_webhook_events`),
+  porque Zernio reintenta hasta 7 veces. A un aviso válido nunca se le responde
+  4xx: Zernio lo daría por muerto.
+- **Qué se guarda (0354).** `social_accounts` (cada fan page o Instagram y su
+  tienda), `social_threads` (una conversación de mensajes directos, o un
+  comentario principal con sus respuestas) y `social_messages`. La tienda de una
+  cuenta sale de su nombre («Kenku Peru» → Kenku) si calza una sola; si no,
+  quien gestiona tiendas la elige en la pantalla. Las asesoras ven solo sus
+  tiendas (RLS).
+- **La pantalla.** Menú «Redes (FB / IG)» (`/dashboard/leads/redes`): «Por
+  responder» (abierto y lo último lo dijo la clienta), «Todos» y «Cerrados»;
+  filtro por red y por tipo. El hilo abierto muestra el post o anuncio del
+  comentario, los mensajes (quién respondió: Kapta con la asesora, «Automático»
+  o «Desde Meta») y la respuesta. Se refresca cada 20 segundos.
+- **Responder.** Un comentario se responde **en público** o **por privado**: el
+  privado es **uno solo por comentario y dentro de 7 días** (Meta); en
+  Instagram, a quien no sigue la cuenta, solo texto. Un mensaje directo se
+  responde libre **dentro de 24 h** del último mensaje de la clienta; **de 24 h
+  a 7 días** solo si lo escribe una persona (Kapta lo manda con la etiqueta
+  `HUMAN_AGENT`); **pasados 7 días** Meta no deja escribir hasta que la clienta
+  vuelva a escribir. Cada envío lleva una llave de idempotencia: un reintento no
+  manda dos veces. «Marcar resuelto» cierra el hilo; un mensaje nuevo de la
+  clienta lo reabre.
+- **Lo anterior al webhook.** «Sincronizar redes» (permiso «Tiendas») trae de
+  Zernio las cuentas, las últimas 30 conversaciones y los últimos 15 posts con
+  comentarios por cuenta.
+- **Lo que falta para usarlo.** En Vercel, `ZERNIO_API_KEY` y
+  `ZERNIO_WEBHOOK_SECRET`; en Zernio, el webhook con ese secreto; en Meta
+  Business Suite, Zernio como app principal de las conversaciones (si no,
+  Messenger e Instagram rechazan las respuestas: «Otra app tiene esta
+  conversación»).
+
+Implementación: `lib/zernio.ts` (cliente), `lib/social-inbox.ts` (lectura de
+avisos y plazos de Meta, puro), `lib/zernio-signature.ts`,
+`lib/social-inbox-store.ts`, `app/api/webhooks/zernio/route.ts`,
+`app/dashboard/leads/redes/` y `components/social-inbox.tsx`. Pruebas:
+`test/social-inbox.test.ts`.
+
 ## 26. Costo de producto (COGS)
 
 El módulo de Costos tiene tres ámbitos: costo logístico (§14), costo de producto
