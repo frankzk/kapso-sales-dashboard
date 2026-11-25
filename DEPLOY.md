@@ -85,6 +85,20 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 25-11-2026 · Correo · Resend: subir a Resend los clientes que aceptan publicidad (0355, MOM §46)
+
+**Migración 0355_resend_marketing: ya aplicada en producción (25-11-2026), antes del código.** Crea
+`resend_settings` (la clave de Resend cifrada por organización y los ids de temas y segmentos; solo
+`service_role`) y `resend_imports` (cada importación pedida; lectura por RLS a la organización), las funciones de
+solo lectura `resend_marketing_contacts`, `resend_marketing_counts` y `resend_marketing_export` (solo
+`service_role`) y dos índices sobre el historial de Shopify (`shopify_history_orders_store_email_recent_idx`,
+`shopify_history_customers_store_marketing_idx`). Aditiva: no toca filas; se puede correr otra vez. Sin ella, la
+página dice «Falta la migración 0355».
+
+Sin variables nuevas: la clave de Resend se pega en Automatizaciones › Correo · Resend (no en Vercel) y se guarda
+con `ENCRYPTION_KEY`, como las demás. Al guardarla, Kapta crea en Resend un tema por tienda y tres segmentos
+(6 meses, 12 meses, todos). Subir pide `automations.manage` y `data.export`, y solo pasa en producción.
+
 ### 25-11-2026 · Carga del sistema: Repro Lima recarga una vez, Aliclik no reescribe entregadas y se mide cada pantalla (sin migración, MOM §9.5 y §35.10)
 
 Sin migración ni variables. Sale de `docs/plan/rendimiento-carga.md` (fase 0 y tres cambios de la fase 1) y de dos
