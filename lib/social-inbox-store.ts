@@ -5,7 +5,7 @@ import "server-only";
 // cliente de servicio: quien llama ya validó la firma o el acceso.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { matchStoreForAccount, type NormalizedAccount, type NormalizedComment, type NormalizedDm, type NormalizedEvent } from "@/lib/social-inbox";
+import { matchStoreForAccount, threadStatusAfter, type NormalizedAccount, type NormalizedComment, type NormalizedDm, type NormalizedEvent } from "@/lib/social-inbox";
 
 /** La fila de la cuenta, creada si no existía, con su tienda (la que ya tenía, o la que calza por nombre). */
 export async function upsertSocialAccount(admin: SupabaseClient, account: NormalizedAccount, active = true): Promise<string | null> {
@@ -118,8 +118,8 @@ export async function refreshThreadSummary(admin: SupabaseClient, threadId: stri
     last_direction: last.direction,
     last_inbound_at: lastIn?.occurred_at ?? null,
     unread: pendingIn,
-    // Un mensaje nuevo de la clienta reabre el hilo; uno nuestro lo deja respondido.
-    status: last.direction === "in" ? "abierto" : status === "cerrado" ? "cerrado" : "respondido",
+    // Un mensaje nuevo de la clienta reabre el hilo; uno nuestro lo deja respondido; lo de +7 días entra resuelto.
+    status: threadStatusAfter(status as "abierto" | "respondido" | "cerrado", { direction: last.direction, occurredAt: last.occurred_at }),
     updated_at: new Date().toISOString(),
   }).eq("id", threadId);
 }

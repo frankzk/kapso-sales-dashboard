@@ -2,7 +2,7 @@
 import { createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { dmReplyMode, matchStoreForAccount, normalizeZernioEvent, privateReplyAllowed } from "@/lib/social-inbox";
+import { dmReplyMode, matchStoreForAccount, normalizeZernioEvent, privateReplyAllowed, threadStatusAfter } from "@/lib/social-inbox";
 import { verifyZernioSignature } from "@/lib/zernio-signature";
 
 const read = (p: string) => readFileSync(p, "utf8");
@@ -160,5 +160,24 @@ describe("respuestas automáticas (fase 3)", () => {
     const actions = read("app/dashboard/leads/redes/actions.ts");
     expect(actions).toContain("const CLAIM_MS = 10 * 60_000;");
     expect(actions).toContain("if (heldByOther(thread, userId)) return { ok: false, error: `La está atendiendo");
+  });
+});
+
+describe("lo antiguo entra resuelto (owner, 25-11-2026)", () => {
+  const now = new Date("2026-11-25T12:00:00Z");
+  it("lo de la clienta de los últimos 7 días espera respuesta", () => {
+    expect(threadStatusAfter("abierto", { direction: "in", occurredAt: "2026-11-20T12:00:00Z" }, now)).toBe("abierto");
+    expect(threadStatusAfter("cerrado", { direction: "in", occurredAt: "2026-11-25T11:00:00Z" }, now)).toBe("abierto");
+  });
+  it("lo de la clienta de más de 7 días queda resuelto", () => {
+    expect(threadStatusAfter("abierto", { direction: "in", occurredAt: "2026-11-17T11:00:00Z" }, now)).toBe("cerrado");
+    expect(threadStatusAfter("abierto", { direction: "in", occurredAt: "2026-03-23T14:10:27Z" }, now)).toBe("cerrado");
+  });
+  it("lo nuestro lo deja respondido, o resuelto si ya lo estaba", () => {
+    expect(threadStatusAfter("abierto", { direction: "out", occurredAt: "2026-11-25T11:00:00Z" }, now)).toBe("respondido");
+    expect(threadStatusAfter("cerrado", { direction: "out", occurredAt: "2026-11-25T11:00:00Z" }, now)).toBe("cerrado");
+  });
+  it("el MOM lo cuenta", () => {
+    expect(read("docs/mom/master-pedidos-v1.md")).toContain("más de 7 días entra resuelto");
   });
 });

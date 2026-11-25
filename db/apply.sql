@@ -709,6 +709,8 @@
 \ir migrations/0353_lima_rider_district_share.sql
 \echo 'Applying 0354_social_inbox.sql'
 \ir migrations/0354_social_inbox.sql
+\echo 'Applying 0355_resend_marketing.sql'
+\ir migrations/0355_resend_marketing.sql
 \echo 'Applying 0356_aliclik_followup_no_touch.sql'
 \ir migrations/0356_aliclik_followup_no_touch.sql
 \echo 'Done.'

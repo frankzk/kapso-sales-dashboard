@@ -17774,7 +17774,13 @@ quedan visibles: los atiende la asesora; Kapta no oculta nada solo.
   clienta lo reabre.
 - **Lo anterior al webhook.** «Sincronizar redes» (permiso «Tiendas») trae de
   Zernio las cuentas, las últimas 30 conversaciones y los últimos 15 posts con
-  comentarios por cuenta.
+  comentarios por cuenta. **Lo de más de 7 días entra resuelto** (owner,
+  25-11-2026: la primera sincronización de Kenku trajo 205 por responder, 161 de
+  más de 7 días, comentarios desde marzo y mensajes sin ventana): un hilo cuyo
+  último mensaje es de la clienta y tiene más de 7 días queda en «Resueltas» y se
+  reabre solo si vuelve a escribir (`threadStatusAfter`). Ese día se resolvieron
+  así las 161 antiguas. Un mensaje directo sin texto (sticker, reacción o
+  publicación compartida) se ve como «Sin texto».
 - **Lo que falta para usarlo.** En Vercel, `ZERNIO_API_KEY` y
   `ZERNIO_WEBHOOK_SECRET`; en Zernio, el webhook con ese secreto; en Meta
   Business Suite, Zernio como app principal de las conversaciones (si no,
@@ -29985,3 +29991,127 @@ cada acción no cambian.
   texto y siguen igual. «Leer con IA» lee un documento ya subido: no tiene
   selector propio. Código: `components/compras/file-picker.tsx`.
 
+
+## 46. Correo de marketing con Resend (25-11-2026)
+
+Pedido del owner (25-11-2026): «arma la sincronización con Resend». Aurela y
+Kenku van a mandar campañas de correo (unas 12 al mes) a los clientes que
+aceptaron publicidad en Shopify. Resend cobra por contacto guardado y no por
+envío, y Kapta ya tiene esos clientes en el Historial de Shopify (§37).
+
+### 46.1 Qué hace y qué no
+
+- **Kapta sube contactos; Resend envía.** Las campañas se escriben, se programan
+  y se miden en Resend (Broadcasts). Kapta no envía correos, no guarda
+  aperturas ni clics y no lee las bajas que pasan en Resend.
+- **De dónde salen.** Del Historial de Shopify (`shopify_history_customers`):
+  solo los que tienen `accepts_marketing = 'subscribed'`. No salen los
+  `unsubscribed` de esa tienda (aunque el mismo correo esté «suscrito» en otra
+  fila de la misma tienda), los que no aceptaron (`not_subscribed`) ni los que
+  no tienen dato. Los pedidos de Kapta (`orders`) no traen correo: no se usan.
+- **Para sumar clientes nuevos** se vuelve a cargar el CSV de clientes de
+  Shopify en el Historial (§37.2). Kapta no sincroniza con Shopify en vivo.
+- **No es un estado del Master.** No crea eventos, alertas ni tareas.
+
+### 46.2 Los tramos
+
+Por tienda, según el último pedido del correo en el historial
+(`shopify_history_orders`, **todos los pedidos, también los cancelados**: para
+el correo importa que el cliente pidió hace poco con esa dirección; sin los
+cancelados Kenku bajaba de 11.532 a 7.972 en 12 meses):
+
+| Tramo | Quiénes | Segmento en Resend |
+|---|---|---|
+| `6m` | pidieron en los últimos 6 meses | «<Tienda> · pidieron en 6 meses» |
+| `12m` | pidieron en los últimos 12 meses (incluye los de 6) | «<Tienda> · pidieron en 12 meses» |
+| `todos` | todos los que aceptan publicidad (incluye los dos) | «<Tienda> · todos los suscritos» |
+
+Cifras al 25-11-2026 (sin dominios mal escritos): Kenku Peru 5.724 / 11.532 /
+42.903; Aurela 1.106 / 1.524 / 47.755. La lista de Aurela es vieja: casi todo
+está en «todos».
+
+Se sube primero el de 6 meses: un dominio nuevo calienta con quien abre. La
+pantalla lo marca «Primero» y su botón es el principal.
+
+### 46.3 Qué correos no se suben
+
+`lib/resend-marketing.ts › filterResendContacts`: los que no tienen forma de
+correo, los repetidos y los de **dominios mal escritos**
+(`RESEND_TYPO_DOMAINS`: «gmial.com», «gmil.com», «hotmal.com», «gmail.con»…):
+rebotan, y los rebotes bajan la reputación del dominio de envío. Lo que queda
+fuera se cuenta y se ve en la importación. Los nombres van limpios: sin saltos
+de línea y sin un «=», «+», «-» o «@» delante (lo que una hoja tomaría por
+fórmula).
+
+### 46.4 Lo que Kapta crea en Resend
+
+- **Un tema (topic) por tienda**, con el nombre de la tienda y suscripción por
+  defecto (`default_subscription: opt_in`). La baja de una marca no da de baja
+  la otra: un correo que está en las dos tiendas deja de recibir Kenku y sigue
+  recibiendo Aurela.
+- **Tres segmentos por tienda**, uno por tramo (§46.2). Son estáticos: un
+  contacto queda en el segmento al que se subió.
+- Se crean al guardar la clave y, si falta alguno, antes de cada subida
+  (`ensureResendSetup`). No se duplican: Kapta usa el id que guardó si sigue en
+  Resend, si no el del mismo nombre, y solo crea lo que falta. Los ids quedan en
+  `resend_settings.topics` (por tienda) y `.segments` (`<tienda>:<tramo>`).
+
+### 46.5 La subida
+
+«Subir a Resend» de un tramo (confirma antes: «Resend cobra por contacto
+guardado»):
+
+1. Prepara el tema y los segmentos (§46.4).
+2. Lee los contactos (`resend_marketing_export`, una respuesta jsonb, sin el
+   tope de filas de la API) y los filtra (§46.3).
+3. Arma un CSV `email,first_name,last_name` —las cabeceras que Resend reconoce
+   sin mapa— y pide la importación (`POST /contacts/imports`) con
+   `on_conflict = upsert` y el segmento del tramo. **No manda el tema ni la
+   columna `unsubscribed`**: volver a subir una lista no vuelve a suscribir a
+   quien se dio de baja en Resend.
+4. Deja constancia en `resend_imports` (tienda, tramo, filas, fuera, estado).
+   Resend procesa la importación por su cuenta; al abrir la página, Kapta le
+   pregunta cómo van las de las últimas 48 h y guarda el estado (`procesando`,
+   `completada`, `fallida`) y las cifras («1.200 nuevos · 90 actualizados»).
+
+«Descargar CSV» baja el mismo archivo, para cargarlo a mano en Resend o
+guardarlo.
+
+### 46.6 La pantalla y los permisos
+
+`/dashboard/automatizaciones/correo` («Correo · Resend», botón en
+Automatizaciones junto a «Conector de IA»).
+
+- Entra quien tiene **`automations.manage`** (§40). **Subir y descargar
+  contactos pide además `data.export`** («Descargar la base de pedidos»): son
+  nombres y correos de clientas. Solo se ven las tiendas que la persona ve.
+- **La clave**: se pega en un campo de contraseña, Kapta la prueba en Resend
+  (una de solo envío contesta `restricted_api_key` y se pide una con «Full
+  access»), la guarda cifrada (`encrypt` de `lib/crypto.ts`) y solo muestra su
+  final («re_…a1b2»). Nunca vuelve al navegador. «Quitar clave» la olvida; en
+  Resend no se borra nada.
+- Guardar la clave y subir solo pasa en **producción** (como el resto de
+  Automatizaciones): una vista previa no escribe en la cuenta de Resend.
+- Cada tienda muestra sus tres tramos con la cifra, la última subida y los
+  botones; abajo, las importaciones y «Cómo se envía» (dominio con SPF, DKIM y
+  DMARC; empezar por 6 meses; en Broadcasts elegir segmento y tema).
+
+### 46.7 Datos (0355)
+
+- `resend_settings` (una fila por organización): `api_key_enc`, `key_hint`,
+  `topics`, `segments`. Solo `service_role`: el navegador no la lee.
+- `resend_imports`: cada importación pedida. Lectura por RLS a los miembros de
+  la organización; escribe solo el servidor.
+- Funciones de solo lectura, solo `service_role`:
+  `resend_marketing_contacts(tienda, dominios)`,
+  `resend_marketing_counts(organización, dominios)` y
+  `resend_marketing_export(tienda, meses, dominios)`.
+- Índices sobre el historial para contar rápido: pedidos por (tienda, correo,
+  fecha) con el correo incluido, para leer solo del índice; clientes por
+  (tienda, `accepts_marketing`).
+
+Código: `lib/resend-marketing.ts` (puro), `lib/resend-client.ts` (la API, con
+`fetch`), `lib/resend-marketing-server.ts`,
+`app/dashboard/automatizaciones/correo/` y `components/resend-panel.tsx`.
+Pruebas: `test/resend-marketing.test.ts`,
+`test/resend-marketing-server.test.ts` y `test/resend-panel-render.test.ts`.

@@ -375,9 +375,11 @@ export function SocialInbox({ threads, accounts, stores, canManage, configured, 
 }
 
 function Avatar({ name, picture }: { name: string; picture: string | null }) {
-  if (picture) {
+  // Las fotos de Meta vencen o se bloquean fuera de su sitio: si no carga, va la inicial.
+  const [broken, setBroken] = useState(false);
+  if (picture && !broken) {
     // eslint-disable-next-line @next/next/no-img-element
-    return <img src={picture} alt="" className="size-9 shrink-0 rounded-full bg-line object-cover" referrerPolicy="no-referrer" />;
+    return <img src={picture} alt="" onError={() => setBroken(true)} className="size-9 shrink-0 rounded-full bg-line object-cover" referrerPolicy="no-referrer" />;
   }
   return <span aria-hidden className="grid size-9 shrink-0 place-items-center rounded-full bg-line text-sm font-semibold text-ink-600">{name.replace(/^@/, "").slice(0, 1).toUpperCase()}</span>;
 }
@@ -685,7 +687,7 @@ function MessageBubble({ m }: { m: SocialMessageView }) {
           </a>
         ) : null)}
         <p className="whitespace-pre-wrap break-words">
-          {m.text}
+          {m.text || (m.attachments.length ? null : <span className="italic text-ink-500">Sin texto (sticker, reacción o publicación compartida)</span>)}
           <span className="ml-2 inline-flex translate-y-0.5 whitespace-nowrap align-baseline text-xs leading-none tabular-nums text-ink-500">
             {m.status === "enviando" ? "Enviando…" : chatbyLimaTime(m.occurredAt)}
           </span>
