@@ -106,6 +106,32 @@ Verificar, en Vercel → Logs:
 3. Al día siguiente, las líneas `[repro-lima] carga` de un día deberían ser bastante menos que las 1.056 del 24-11.
 4. `/api/cron/invoice-snapshots` corre en los minutos 2, 7, 12, …
 
+### 25-11-2026 · Leads → Redes: comentarios y mensajes de Facebook e Instagram por Zernio, con reparto y respuestas automáticas (0354, MOM §25.4)
+
+**Migración `0354_social_inbox.sql`: aplicar en producción ANTES del código.** Crea `social_accounts`,
+`social_webhook_events`, `social_threads`, `social_messages` y `social_auto_settings` (respuestas automáticas,
+apagadas por defecto) (RLS de lectura por tienda con `auth_store_ids()`;
+escritura solo del servidor). Tablas nuevas: no toca datos y se puede correr otra vez. Sin ella, Leads → Redes
+falla al leer y el webhook responde 500 (Zernio reintenta).
+
+Variables nuevas en Vercel (Production), las pone el owner, nunca en el chat:
+- `ZERNIO_API_KEY`: la clave de la API de Zernio (Dashboard → API keys, empieza con `sk_`).
+- `ZERNIO_WEBHOOK_SECRET`: un secreto largo inventado por el owner; el mismo va en Zernio.
+
+En Zernio (Dashboard → Webhooks): URL `https://kapso-sales-dashboard.vercel.app/api/webhooks/zernio`, el mismo
+secreto y los eventos `message.received`, `message.sent`, `comment.received`, `account.connected` y
+`account.disconnected`. En Meta Business Suite: Zernio como app principal de las conversaciones.
+
+Verificar:
+1. Leads → Redes (menú «Redes (FB / IG)») abre; con permiso «Tiendas», «Sincronizar redes» trae las cuentas
+   y lo reciente.
+2. Un comentario nuevo en la fan page aparece en «Por responder» en menos de un minuto
+   (`social_webhook_events.processed_at` con `error` vacío).
+3. Responder en público y por privado desde Kapta; el mensaje sale en Facebook o Instagram.
+4. Abrir un hilo desde dos usuarios: el segundo ve «La atiende …» y no puede responder.
+5. Encender «Respuestas automáticas» de Kenku, comentar «precio» en un anuncio declarado: llega la respuesta
+   pública y el privado con producto, precio y WhatsApp (en la bandeja, «Automático»).
+
 ### 24-11-2026 · Repro Lima: «Guardar y pasar al siguiente» se queda en el siguiente (sin migración, MOM §9.5)
 
 Sin migración ni variables. A veces, al guardar, la ficha volvía al mismo pedido y el equipo registraba otra vez el

@@ -707,4 +707,6 @@
 \ir migrations/0352_repro_box_con_courier.sql
 \echo 'Applying 0353_lima_rider_district_share.sql'
 \ir migrations/0353_lima_rider_district_share.sql
+\echo 'Applying 0354_social_inbox.sql'
+\ir migrations/0354_social_inbox.sql
 \echo 'Done.'

@@ -142,6 +142,8 @@ describe("el menú", () => {
     expect(hrefs(navItems(false, true, true))).toEqual([
       "/dashboard",
       "/dashboard/leads",
+      // Leads → Redes (MOM §25.4): comentarios y mensajes de Facebook e Instagram.
+      "/dashboard/leads/redes",
       "/dashboard/pedidos",
       "/dashboard/pagos",
       // La «Lista negra» (MOM §41): la ve todo el que ve pedidos.
@@ -170,6 +172,8 @@ describe("el menú", () => {
     expect(hrefs(items)).toEqual([
       "/dashboard",
       "/dashboard/leads",
+      // Leads → Redes (MOM §25.4): comentarios y mensajes de Facebook e Instagram.
+      "/dashboard/leads/redes",
       "/dashboard/pedidos",
       "/dashboard/clientes/lista-negra",
       "/dashboard/pedidos/pago-diferencia",
