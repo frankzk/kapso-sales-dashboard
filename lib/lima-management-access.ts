@@ -1,5 +1,5 @@
 import type { createAdminSupabase } from "@/lib/db";
-import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
+import { allCourierRows, COURIER_ROWS_WIDE_BATCH, courierRowsByIds } from "@/lib/courier-flow";
 import type { LimaPendingOrder } from "@/lib/repro-lima-pending";
 import { isDeliveryManagementCall } from "@/lib/lima-management";
 
@@ -20,8 +20,11 @@ export async function loadLimaManagement(admin: Admin, orderIds: string[], creat
     if (!fact.lastCallAt || Date.parse(at) > Date.parse(fact.lastCallAt)) { fact.lastCallAt = at; fact.lastCallResult = result ?? null; }
   };
   // Se pagina también dentro de cada lote: más de mil gestiones nunca se cortan.
+  // Por eso el lote puede ser ancho (400 ids, 25-11-2026): con 1.157 pedidos eran
+  // 12 lotes por tabla en ocho tablas, unas 100 consultas solo para saber si ya
+  // se llamó a cada clienta.
   const read = async <T,>(table: string, columns: string, field: string, ids: string[], filter: (q: Query) => Query = (q) => q): Promise<T[]> => {
-    const result = await courierRowsByIds<T>(ids, (chunk) => allCourierRows<T>((from, to) => filter(admin.from(table).select(columns).in(field, chunk) as unknown as Query).order("id").range(from, to) as unknown as PromiseLike<{ data: T[] | null; error: { message: string } | null }>).then((data) => ({ data, error: null })));
+    const result = await courierRowsByIds<T>(ids, (chunk) => allCourierRows<T>((from, to) => filter(admin.from(table).select(columns).in(field, chunk) as unknown as Query).order("id").range(from, to) as unknown as PromiseLike<{ data: T[] | null; error: { message: string } | null }>).then((data) => ({ data, error: null })), COURIER_ROWS_WIDE_BATCH);
     return result.data;
   };
   const [events, repro, voice, anura, leads, guides] = await Promise.all([

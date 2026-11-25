@@ -1,6 +1,6 @@
 import type { createAdminSupabase } from "@/lib/db";
 import type { ReproScope } from "@/lib/repro-lima-access";
-import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
+import { allCourierRows, allCourierRowsCounted, COURIER_ROWS_WIDE_BATCH, courierRowsByIds, courierRowsByIdsWide } from "@/lib/courier-flow";
 import { buildRiderSuggestions, parseGfAssigned, RIDER_SHARE_DAYS, shownRiderSuggestion, type GfAssignedRider, type RiderShareRow } from "@/lib/lima-rider-suggest";
 import { districtKey, isLimaPendingStage, LIMA_PENDING_STAGES, limaBoxNeverLeft, type LimaPendingGf, type LimaPendingOps, type LimaPendingOrder, type NeverLeftGuide } from "@/lib/repro-lima-pending";
 import { isCurrentBoxDay } from "@/lib/dispatch-plan";
@@ -44,6 +44,9 @@ interface GfItemRow { shipment_id: string; manifest_id: string; office_checked_a
 interface GfManifestRow { id: string; route_date: string; driver_name: string | null; courier: string | null; kind: string | null; state: string | null }
 interface GfRequestRow { order_id: string; shipment_id: string | null; scheduled_for: string | null; status: string }
 type Read<T> = PromiseLike<{ data: T[] | null; error: { message: string } | null }>;
+/** Una lectura por lotes anchos: pide el conteo exacto para notar si el servidor cortó la respuesta (`courierRowsByIdsWide`). */
+type Counted<T> = PromiseLike<{ data: T[] | null; error: { message: string } | null; count: number | null }>;
+const EXACT = { count: "exact" } as const;
 
 /** Las salidas que son de Grupo GF: la «por definir» que rellena y la propia. */
 const GF_OUTPUT_COURIERS = new Set(["por_definir", "propio"]);
@@ -75,8 +78,8 @@ async function ordersInCurrentGfBoxes(admin: Admin, orderIds: ReadonlySet<string
   // Paginado: una caja por motorizado y carga, hoy y mañana, pasa de mil ítems en un pico.
   const items = await allCourierRows<{ shipment_id: string }>((from, to) => admin.from("dispatch_manifest_items")
     .select("shipment_id").in("manifest_id", ids).is("removed_at", null).order("id").range(from, to) as unknown as Read<{ shipment_id: string }>);
-  const shipments = await courierRowsByIds<{ order_id: string }>([...new Set(items.map((i) => i.shipment_id))], (chunk) => admin.from("shipments")
-    .select("order_id").in("id", chunk) as unknown as Read<{ order_id: string }>);
+  const shipments = await courierRowsByIdsWide<{ order_id: string }>([...new Set(items.map((i) => i.shipment_id))], (chunk) => admin.from("shipments")
+    .select("order_id", EXACT).in("id", chunk) as unknown as Counted<{ order_id: string }>);
   for (const s of shipments.data) if (orderIds.has(s.order_id)) out.add(s.order_id);
   return out;
 }
@@ -110,36 +113,51 @@ async function loadGfPlanFacts(admin: Admin, rows: PendingMasterRow[], storeOrg:
   const history = new Map<string, string[]>();
   const isRetry = (r: PendingMasterRow) => r.macro_stage === "en_curso" && r.macro_substage === "por_reprogramar_lima";
   const inCurso = new Set(rows.filter((r) => r.macro_stage === "en_curso" && !isRetry(r)).map((r) => r.order_id));
-  const boxed = await ordersInCurrentGfBoxes(admin, inCurso, today);
-  const candidates = rows.filter((r) => r.macro_stage === "preparacion" || r.macro_stage === "por_despachar" || isRetry(r) || boxed.has(r.order_id));
   // «Lima trabados» (§9.6) mira las salidas de lo que ya pasó Por confirmar:
   // la misma lectura de `shipments`, por `order_id` (índice), ampliada a lo
   // En curso que no está en una caja vigente. Nada por fila: lotes de ids.
   const operational = rows.filter((r) => r.macro_stage === "preparacion" || r.macro_stage === "por_despachar" || r.macro_stage === "en_curso");
   if (!operational.length) return { gf: out, ops, history };
   const orderIds = operational.map((r) => r.order_id);
-  const [providers, shipments] = await Promise.all([
+  // UNA SOLA ESPERA (25-11-2026): las cajas vigentes de Grupo GF (tres lecturas
+  // en fila), el proveedor y las salidas no dependen entre sí. Antes las cajas
+  // se esperaban primero y todo lo demás hacía fila detrás.
+  const [boxed, providerRows, shipments] = await Promise.all([
+    ordersInCurrentGfBoxes(admin, inCurso, today),
     // El proveedor de la organización de cada tienda, como el resto de Repro Lima.
-    orgIds.length && candidates.length
+    orgIds.length
       ? courierRowsByIds<{ id: string; org_id: string }>(orgIds, (chunk) => admin.from("logistics_providers")
         .select("id,org_id").eq("code", "grupo-gf-courier").in("org_id", chunk) as unknown as Read<{ id: string; org_id: string }>)
       : Promise.resolve({ data: [] as Array<{ id: string; org_id: string }> }),
-    courierRowsByIds<GfShipmentRow>(orderIds, (chunk) => admin.from("shipments")
-      .select(GF_SHIPMENT_COLUMNS).in("order_id", chunk) as unknown as Read<GfShipmentRow>),
+    // Lotes anchos (25-11-2026): con 1.157 pedidos eran 12 lotes de 100; ahora 3.
+    courierRowsByIdsWide<GfShipmentRow>(orderIds, (chunk) => admin.from("shipments")
+      .select(GF_SHIPMENT_COLUMNS, EXACT).in("order_id", chunk) as unknown as Counted<GfShipmentRow>),
   ]);
+  const candidates = rows.filter((r) => r.macro_stage === "preparacion" || r.macro_stage === "por_despachar" || isRetry(r) || boxed.has(r.order_id));
+  // Sin candidatos, el proveedor no cuenta (como cuando no se leía): ni convenio, ni tarifas, ni pausas.
+  const providers = { data: candidates.length ? providerRows.data : [] };
   const candidateIds = new Set(candidates.map((r) => r.order_id));
   const candidateOrderIds = [...candidateIds];
   const providerIds = providers.data.map((p) => p.id);
   const providerByOrg = new Map(providers.data.map((p) => [p.org_id, p.id]));
   const gfOrderIds = [...new Set(shipments.data.filter((s) => s.courier === "gf_courier" && LIVE_OUTPUT.has(s.delivery_status ?? "") && !s.returned_at && s.custody_state !== "devuelto").map((s) => s.order_id))];
   type GuideOrigin = { order_id: string; guide_code: string | null; reason: string | null; occurred_at: string };
-  const [requests, items, agreements, tariffs, events, guideOrigins] = await Promise.all([
+  const outputsByOrder = new Map<string, GfShipmentRow[]>();
+  for (const s of shipments.data) outputsByOrder.set(s.order_id, [...(outputsByOrder.get(s.order_id) ?? []), s]);
+  // El historial de rutas reportadas solo necesita las salidas: va en la misma
+  // espera que lo demás (25-11-2026), no en fila al final.
+  const historyIds = operational.filter((r) => {
+    const outputs = outputsByOrder.get(r.order_id) ?? [];
+    return !r.dispatched_with?.length && r.current_courier === "propio"
+      && outputs.length > 0 && outputs.every((s) => s.courier === "propio");
+  }).map((r) => r.order_id);
+  const [requests, items, agreements, tariffs, events, guideOrigins, reportedHistory] = await Promise.all([
     providerIds.length
-      ? courierRowsByIds<GfRequestRow>(candidateOrderIds, (chunk) => admin.from("logistics_requests")
-        .select("order_id,shipment_id,scheduled_for,status").in("provider_id", providerIds).in("status", ["accepted", "scheduled"]).in("order_id", chunk) as unknown as Read<GfRequestRow>)
+      ? courierRowsByIdsWide<GfRequestRow>(candidateOrderIds, (chunk) => admin.from("logistics_requests")
+        .select("order_id,shipment_id,scheduled_for,status", EXACT).in("provider_id", providerIds).in("status", ["accepted", "scheduled"]).in("order_id", chunk) as unknown as Counted<GfRequestRow>)
       : Promise.resolve({ data: [] as GfRequestRow[] }),
-    courierRowsByIds<GfItemRow>(shipments.data.map((s) => s.id), (chunk) => admin.from("dispatch_manifest_items")
-      .select("shipment_id,manifest_id,office_checked_at,pickup_checked_at").in("shipment_id", chunk).is("removed_at", null) as unknown as Read<GfItemRow>),
+    courierRowsByIdsWide<GfItemRow>(shipments.data.map((s) => s.id), (chunk) => admin.from("dispatch_manifest_items")
+      .select("shipment_id,manifest_id,office_checked_at,pickup_checked_at", EXACT).in("shipment_id", chunk).is("removed_at", null) as unknown as Counted<GfItemRow>),
     // El convenio, el Tarifario y las pausas del proveedor: lo que la cola mira para «Sin condiciones».
     providerIds.length
       ? allCourierRows<{ id: string; store_id: string | null; provider_id: string }>((from, to) => admin.from("logistics_service_agreements")
@@ -155,7 +173,8 @@ async function loadGfPlanFacts(admin: Admin, rows: PendingMasterRow[], storeOrg:
       : Promise.resolve([] as DistrictAvailabilityEventRow[]),
     courierRowsByIds<GuideOrigin>(gfOrderIds, (chunk) => allCourierRows<GuideOrigin>((from, to) => admin.from("order_events")
       .select("order_id,guide_code,reason,occurred_at").in("order_id", chunk).eq("kind", "guide_registered").eq("courier", "gf_courier")
-      .order("id").range(from, to) as unknown as Read<GuideOrigin>).then((data) => ({ data, error: null }))),
+      .order("id").range(from, to) as unknown as Read<GuideOrigin>).then((data) => ({ data, error: null })), COURIER_ROWS_WIDE_BATCH),
+    loadLimaReportedHistory(admin, historyIds),
   ]);
   // Manda el último registro de ESA guía. Una creación manual posterior no
   // hereda el origen automático de una anterior con el mismo código.
@@ -172,8 +191,8 @@ async function loadGfPlanFacts(admin: Admin, rows: PendingMasterRow[], storeOrg:
   const automaticGuides = new Set([...latestOrigins].filter(([, origin]) => origin.automatic).map(([key]) => key));
   const agreementByStore = new Map(agreements.filter((a) => a.store_id).map((a) => [`${a.provider_id}:${a.store_id}`, a.id]));
   const tariffRows = tariffs.map((t) => ({ ...t, delivery_amount: Number(t.delivery_amount), rejection_amount: Number(t.rejection_amount) }));
-  const manifests = await courierRowsByIds<GfManifestRow>([...new Set(items.data.map((i) => i.manifest_id))], (chunk) => admin.from("dispatch_manifests")
-    .select("id,route_date,driver_name,courier,kind,state").in("id", chunk) as unknown as Read<GfManifestRow>);
+  const manifests = await courierRowsByIdsWide<GfManifestRow>([...new Set(items.data.map((i) => i.manifest_id))], (chunk) => admin.from("dispatch_manifests")
+    .select("id,route_date,driver_name,courier,kind,state", EXACT).in("id", chunk) as unknown as Counted<GfManifestRow>);
   const gfManifest = new Map(manifests.data.filter(isGfReparto).map((m) => [m.id, m]));
   type Box = NonNullable<LimaPendingGf["box"]> & { current: boolean; withRider: boolean };
   const boxByShipment = new Map<string, Box>();
@@ -190,14 +209,6 @@ async function loadGfPlanFacts(admin: Admin, rows: PendingMasterRow[], storeOrg:
     if (!latest || latest.day < box.day) latestBoxByShipment.set(item.shipment_id, box);
   }
   const requestByOrder = new Map(requests.data.map((r) => [r.order_id, r]));
-  const outputsByOrder = new Map<string, GfShipmentRow[]>();
-  for (const s of shipments.data) outputsByOrder.set(s.order_id, [...(outputsByOrder.get(s.order_id) ?? []), s]);
-  const historyIds = operational.filter((r) => {
-    const outputs = outputsByOrder.get(r.order_id) ?? [];
-    return !r.dispatched_with?.length && r.current_courier === "propio"
-      && outputs.length > 0 && outputs.every((s) => s.courier === "propio");
-  }).map((r) => r.order_id);
-  const reportedHistory = await loadLimaReportedHistory(admin, historyIds);
   for (const [id, codes] of reportedHistory) history.set(id, codes);
   for (const row of operational) {
     const fact = opsFacts(outputsByOrder.get(row.order_id) ?? [], latestBoxByShipment, automaticGuides);
@@ -305,8 +316,8 @@ async function loadCourierDetails(admin: Admin, rows: PendingMasterRow[]): Promi
   const ids = rows.filter((r) => r.current_courier === "aliclik" || r.current_courier === "propio").map((r) => r.order_id);
   if (!ids.length) return out;
   type DetailShipment = { id: string; order_id: string; courier: string | null; aliclik_transport_name: string | null; output_number: number | null; created_at: string | null };
-  const shipments = await courierRowsByIds<DetailShipment>(ids, (chunk) => admin.from("shipments")
-    .select("id,order_id,courier,aliclik_transport_name,output_number,created_at").in("order_id", chunk).in("courier", ["aliclik", "propio"]) as unknown as Read<DetailShipment>);
+  const shipments = await courierRowsByIdsWide<DetailShipment>(ids, (chunk) => admin.from("shipments")
+    .select("id,order_id,courier,aliclik_transport_name,output_number,created_at", EXACT).in("order_id", chunk).in("courier", ["aliclik", "propio"]) as unknown as Counted<DetailShipment>);
   const courierOf = new Map(rows.map((r) => [r.order_id, r.current_courier]));
   // La última salida del courier vigente: el consecutivo más alto, y si no, la más nueva.
   const latest = new Map<string, DetailShipment>();
@@ -326,11 +337,11 @@ async function loadCourierDetails(admin: Admin, rows: PendingMasterRow[]): Promi
   }
   if (!ownIds.length) return out;
   type DetailItem = { shipment_id: string; manifest_id: string; removed_at: string | null };
-  const items = await courierRowsByIds<DetailItem>(ownIds, (chunk) => admin.from("dispatch_manifest_items")
-    .select("shipment_id,manifest_id,removed_at").in("shipment_id", chunk) as unknown as Read<DetailItem>);
+  const items = await courierRowsByIdsWide<DetailItem>(ownIds, (chunk) => admin.from("dispatch_manifest_items")
+    .select("shipment_id,manifest_id,removed_at", EXACT).in("shipment_id", chunk) as unknown as Counted<DetailItem>);
   type DetailManifest = { id: string; route_date: string; driver_name: string | null; state: string | null };
-  const manifests = await courierRowsByIds<DetailManifest>([...new Set(items.data.map((i) => i.manifest_id))], (chunk) => admin.from("dispatch_manifests")
-    .select("id,route_date,driver_name,state").in("id", chunk) as unknown as Read<DetailManifest>);
+  const manifests = await courierRowsByIdsWide<DetailManifest>([...new Set(items.data.map((i) => i.manifest_id))], (chunk) => admin.from("dispatch_manifests")
+    .select("id,route_date,driver_name,state", EXACT).in("id", chunk) as unknown as Counted<DetailManifest>);
   const manifestById = new Map(manifests.data.filter((m) => m.state !== "cancelled").map((m) => [m.id, m]));
   const orderOfShipment = new Map([...latest.values()].map((s) => [s.id, s.order_id]));
   const best = new Map<string, { day: string; active: boolean; rider: string }>();
@@ -489,11 +500,12 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
   const ids = [...scope.storeIds];
   if (!ids.length) return [];
   const [orders, stores, programs] = await Promise.all([
-    allCourierRows<PendingMasterRow>((from, to) => admin.from("order_master")
-      .select("order_id,store_id,order_name,customer_name,customer_phone,district,order_total,order_created_at,macro_since,macro_stage,macro_substage,coverage,current_courier,dispatched_at,attempt_count,dispatched_with,sales_channel,address,reference,dispatch_scheduled_on,dispatch_courier")
+    // Las páginas que faltan después de la primera van a la vez (25-11-2026): eran tres en fila.
+    allCourierRowsCounted<PendingMasterRow>((from, to, counted) => admin.from("order_master")
+      .select("order_id,store_id,order_name,customer_name,customer_phone,district,order_total,order_created_at,macro_since,macro_stage,macro_substage,coverage,current_courier,dispatched_at,attempt_count,dispatched_with,sales_channel,address,reference,dispatch_scheduled_on,dispatch_courier", counted ? EXACT : undefined)
       .in("store_id", ids).eq("coverage", "lima").in("macro_stage", [...LIMA_PENDING_STAGES])
       .order("order_created_at", { ascending: false, nullsFirst: false }).order("order_id")
-      .range(from, to) as unknown as PromiseLike<{ data: PendingMasterRow[] | null; error: { message: string } | null }>),
+      .range(from, to) as unknown as Counted<PendingMasterRow>),
     courierRowsByIds(ids, (chunk) => admin.from("stores").select("id,name,org_id").in("id", chunk)),
     allCourierRows<PendingProgramRow>((from, to) => admin.from("gf_dispatch_programs")
       .select("order_id,store_id,scheduled_for").in("store_id", ids).order("order_id").range(from, to) as unknown as PromiseLike<{ data: PendingProgramRow[] | null; error: { message: string } | null }>),

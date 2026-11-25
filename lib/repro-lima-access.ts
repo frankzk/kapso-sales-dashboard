@@ -20,7 +20,7 @@ import type { createAdminSupabase } from "@/lib/db";
 import { getAccessibleStores, getCurrentUser } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { resolveAgentNames } from "@/lib/agent-names";
-import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
+import { allCourierRows, allCourierRowsCounted, COURIER_ROWS_WIDE_BATCH, courierRowsByIds } from "@/lib/courier-flow";
 import { limaClock, sameDayCutoffLabel } from "@/lib/grupo-gf-courier";
 import { limaDay } from "@/lib/dispatch-day";
 import { guideFailedAt } from "@/lib/reproprovincia";
@@ -515,16 +515,17 @@ export async function loadReproLima(
 
   // Oleada 1: la etapa, los casos abiertos, las tiendas y el proveedor.
   const [orderRows, openCases, attentionCases, { data: storeRows }, { data: providerRows }] = await Promise.all([
-    allCourierRows<ReproOrderRow>((from, to) => {
+    // Las páginas que faltan después de la primera van a la vez (25-11-2026): eran tres en fila.
+    allCourierRowsCounted<ReproOrderRow>((from, to, counted) => {
       let query = admin
         .from("order_master")
-        .select(REPRO_ORDER_COLUMNS)
+        .select(REPRO_ORDER_COLUMNS, counted ? { count: "exact" } : undefined)
         .in("store_id", storeIds);
       query = opts.attention
         ? query.eq("coverage", "lima").in("macro_stage", ["por_confirmar", "preparacion", "por_despachar", "en_curso"])
         : query.eq("macro_stage", "en_curso").eq("macro_substage", "por_reprogramar_lima");
       if (onlyOrders) query = query.in("order_id", onlyOrders);
-      return query.order("order_id").range(from, to) as unknown as PromiseLike<{ data: ReproOrderRow[] | null; error: { message: string } | null }>;
+      return query.order("order_id").range(from, to) as unknown as PromiseLike<{ data: ReproOrderRow[] | null; error: { message: string } | null; count: number | null }>;
     }),
     courierRowsByIds(storeIds, (chunk) => {
       let query = admin.from("lima_repro_cases").select("id,order_id,episode_key").in("store_id", chunk).is("closed_at", null);
@@ -586,7 +587,7 @@ export async function loadReproLima(
     .order("occurred_at", { ascending: false })
     .order("id")
     .range(from, to) as unknown as PromiseLike<{ data: Array<{ case_id: string; actor: string | null; occurred_at: string; outcome: string | null; channel: string | null; note?: string | null }> | null; error: { message: string } | null }>)
-    .then((data) => ({ data, error: null })));
+    .then((data) => ({ data, error: null })), COURIER_ROWS_WIDE_BATCH);
   const lastCallByCase = new Map<string, { at: string; actor: string | null; outcome: string | null; note: string | null }>();
   for (const call of callRows as Array<{ case_id: string; actor: string | null; occurred_at: string; outcome: string | null; channel: string | null; note?: string | null }>) {
     // «Desarmar y cerrar sin llamada» no es una llamada.

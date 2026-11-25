@@ -6128,6 +6128,25 @@ pedía tres veces. Desde entonces:
 - No cambia ninguna regla: ni el candado, ni el episodio, ni qué se puede
   atender. Solo cuándo se lee.
 
+**Cuánto tarda cada lectura (owner, 25-11-2026: «que Repro Lima quede con
+carga rápida»).** Medido ese día, ya con una sola lectura por guardado: cada
+lectura de la pantalla tardaba de 2,3 a 3,6 s y hacía unas 260 consultas
+pequeñas a la base, porque cada tabla se leía de a 100 pedidos (12 tandas con
+los 1.184 pendientes de Lima). La base estaba quieta; lo que se esperaba era
+la fila de consultas, y con varias personas a la vez la fila crecía. Desde
+entonces:
+- **Cada tabla se lee de a 400 pedidos**: la cuarta parte de las consultas.
+- **Nunca una lista a medias.** Cada tanda pide a la base cuántas filas hay;
+  si llegaron menos (el servidor corta una respuesta muy grande sin avisar),
+  la tanda se parte en dos y se vuelve a leer. Una lectura que falla sigue
+  dejando la pantalla en error, no una lista incompleta.
+- **Los pedidos de la etapa no esperan sus páginas en fila**: se pide la
+  primera y las que faltan van juntas.
+- **Las cajas vigentes de Grupo GF, el proveedor y las salidas** se leen en
+  una sola espera, y el historial de rutas reportadas ya no hace fila al final.
+- No cambia qué se lee ni ninguna regla: la lista, los conteos y lo que se
+  puede hacer con cada pedido son los mismos.
+
 **Cuatro listas: etiquetas de pantalla, no subetapas.** «Por decidir»,
 «Llamar después», «Programados» y «Cerrados» se derivan del caso, del Master y
 del programa de Grupo GF. Ninguna es una subetapa: el pedido sigue en «En curso

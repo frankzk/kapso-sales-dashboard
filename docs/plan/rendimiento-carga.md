@@ -322,6 +322,34 @@ reservado y uno de cada minuto los pisaría. El efecto para el equipo es el
 mismo: con Kapta abierto, un aviso vencido pasa a la siguiente persona en un
 minuto y pico.
 
+### Repro Lima: cuánto tarda cada lectura (25-11-2026)
+
+Medido con la línea `[repro-lima] carga`, una hora en horario de trabajo, ya
+con una lectura por guardado: 2,3 a 3,6 s por lectura. La causa era la
+cantidad de consultas: unas 260 por lectura, porque cada tabla se leía de a
+100 pedidos y varias lecturas esperaban a otras sin depender de ellas.
+
+| Qué | Antes | Ahora |
+|---|---|---|
+| Pedidos por tanda en cada tabla | 100 (12 tandas con 1.184 pedidos) | 400 (3 tandas) |
+| Consultas por lectura de la pantalla | Unas 260 | Unas 100 (estimado) |
+| Pedidos de la etapa (3 páginas) | Una tras otra | La primera, y las otras dos juntas |
+| Cajas vigentes de Grupo GF, proveedor y salidas | Las cajas primero, lo demás detrás | En una sola espera |
+| Historial de rutas reportadas | En fila al final | Junto a las demás lecturas |
+
+Filas por tanda, medidas en producción ese día: la tabla más cargada son las
+salidas, con 1,25 por pedido (unas 500 filas por tanda de 400), lejos del tope
+de 1.000 filas por respuesta. Por si un día no lo está, cada tanda pide el
+conteo exacto y se parte sola cuando el servidor la corta.
+
+**Cuánto mejora.** Estimado, no medido: el tiempo debería bajar en proporción
+a las consultas. Se confirma con la línea `[repro-lima] carga` después de
+desplegar.
+
+Queda para después: que las dos lecturas de la pantalla (casos y pendientes)
+compartan lo que hoy leen por separado (las salidas se leen cuatro veces), y
+que los lotes vayan en una sola llamada.
+
 ### Siguiente paso propuesto
 
 1. Medir un día con lo que ya está en producción (desde el 25-11-2026).
