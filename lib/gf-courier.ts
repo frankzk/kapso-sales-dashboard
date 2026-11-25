@@ -32,6 +32,11 @@ export interface GfOrder {
   stage?: { code: string; name?: string; rider_name?: string | null } | null;
   /** La nota del pedido que tiene GF (sin lo que agrega GF). Ausente en un GF anterior a la ruta de notas. */
   observations?: string | null;
+  /**
+   * Solo en la respuesta de cambiar fecha (GF, 25-11-2026): qué pasa con la caja. SAME_LABEL = misma guía y caja armada;
+   * NEW_LABEL = sigue armada y se rotula de nuevo; REARM = GF desarma la caja guardada y ese día la arma otra vez.
+   */
+  box?: "SAME_LABEL" | "NEW_LABEL" | "REARM";
 }
 export interface GfOrderInput {
   external_id: string; service: "COD_LIMA";

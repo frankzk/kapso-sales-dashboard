@@ -113,3 +113,20 @@ describe("Grupo GF ya no sale con salidas nuevas (owner 17-11-2026)", () => {
     expect(src).toContain("if (await storeUsesGfCourierApi(admin, row.store_id as string | null, gfApiStores)) {");
   });
 });
+
+// Owner, 25-11-2026: la caja guardada en GF que Repro Lima reprograma se desarma y se arma de nuevo; Kapta lo dice tal cual.
+describe("cambiar el día de una guía GF: qué pasa con la caja", () => {
+  it("dice lo que GF responde en `box`; sin el dato, lo de siempre", async () => {
+    const { gfDateBoxText } = await import("@/lib/gf-courier-status");
+    expect(gfDateBoxText("REARM")).toBe("GF desarma la caja guardada y ese día la arma de nuevo (Por preparar)");
+    expect(gfDateBoxText("NEW_LABEL")).toBe("la caja sigue armada y GF la rotula de nuevo ese día");
+    expect(gfDateBoxText("SAME_LABEL")).toBe("con la misma guía y la caja armada");
+    expect(gfDateBoxText(undefined)).toBe("con la misma guía y la caja armada");
+  });
+  it("la Actividad y el aviso de Repro Lima usan ese texto", () => {
+    const guide = read("lib/gf-courier-guide.ts");
+    expect(guide).toContain("${gfDateBoxText(box)}.`,");
+    expect(guide).toContain("label_kept: !box || box === \"SAME_LABEL\"");
+    expect(read("app/dashboard/pedidos/repro-lima/actions.ts")).toContain("${gfDateBoxText(moved.box)}.`");
+  });
+});
