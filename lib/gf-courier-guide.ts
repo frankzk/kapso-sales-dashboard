@@ -22,7 +22,7 @@ import { createAdminSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
 import { decryptOrNull } from "@/lib/crypto";
 import { gfCourier, gfIdempotencyKey, type GfOrder } from "@/lib/gf-courier";
-import { gfCancelBlockedByRider, liveGfGuides } from "@/lib/gf-courier-status";
+import { gfCancelBlockedByRider, gfDateBoxText, liveGfGuides } from "@/lib/gf-courier-status";
 import { buildGfOrderInput, gfGuideConfirmed, gfNotesInSync, gfOrderNote } from "@/lib/gf-courier-order";
 import { isWebPrepaid } from "@/lib/order-paid";
 import { applyGfSnapshot, GF_COURIER, GF_CREATED_VIA } from "@/lib/gf-courier-track";
@@ -188,7 +188,7 @@ export type GfCancelResult =
  * (owner, 15-11-2026). GF decide si todavía se puede: sin costo antes de preparar; después responde con el estado o
  * con el costo de anular. Lo que GF responda se devuelve tal cual.
  */
-export type GfDateResult = { ok: true; trackingId: string; newDate: string } | { ok: false; error: string; code?: string };
+export type GfDateResult = { ok: true; trackingId: string; newDate: string; box?: GfOrder["box"] } | { ok: false; error: string; code?: string };
 
 /**
  * Cambia el día de una guía GF viva que todavía no tiene motorizado (owner, 17-11-2026): la caja sigue armada con la
@@ -209,11 +209,13 @@ export async function changeGfGuideDateFor(
     gfIdempotencyKey(orderId, `date-${trackingId}-${ctx.day}`));
   if (!res.ok) return { ok: false, error: res.error.message, code: res.error.code };
   await applyGfSnapshot(res.data, admin);
+  const box = res.data.box;
   await admin.from("order_events").insert({ store_id: storeId, order_id: orderId, kind: "courier_status", occurred_at: new Date().toISOString(),
     actor: ctx.userId, source: GF_COURIER, courier: GF_COURIER, guide_code: trackingId, reason: ctx.reason,
-    note: `Fecha de la guía ${trackingId} cambiada al ${ctx.day} en GF Courier, con la misma guía y la caja armada.`,
-    payload: { new_date: ctx.day, label_kept: true } });
-  return { ok: true, trackingId, newDate: ctx.day };
+    // La caja guardada en GF tras una visita fallida se desarma y se arma de nuevo ese día (owner, 25-11-2026): GF lo dice en `box`.
+    note: `Fecha de la guía ${trackingId} cambiada al ${ctx.day} en GF Courier${box === "REARM" || box === "NEW_LABEL" ? ": " : ", "}${gfDateBoxText(box)}.`,
+    payload: { new_date: ctx.day, label_kept: !box || box === "SAME_LABEL", ...(box ? { box } : {}) } });
+  return { ok: true, trackingId, newDate: ctx.day, ...(box ? { box } : {}) };
 }
 
 /**

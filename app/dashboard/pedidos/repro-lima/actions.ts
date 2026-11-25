@@ -13,7 +13,7 @@
 // con GF Courier deja la guía GF creada para el día acordado (`createGfGuideFor`)
 // y, si había una viva sin asignar, la anula antes (`cancelGfGuideFor`).
 
-import { gfCancelRequestedText } from "@/lib/gf-courier-status";
+import { gfCancelRequestedText, gfDateBoxText } from "@/lib/gf-courier-status";
 import { sameCourier } from "@/lib/shipment-output";
 import { revalidatePath } from "next/cache";
 import { createAdminSupabase } from "@/lib/db";
@@ -642,7 +642,7 @@ async function gfGuideForAgreement(admin: Admin, input: {
     } catch (error) {
       moved = { ok: false, error: errorText(error) };
     }
-    if (moved.ok) return { notice: `${saved} La guía ${code} ahora sale ese día, con la misma guía y la caja armada.`, programChanged };
+    if (moved.ok) return { notice: `${saved} La guía ${code} ahora sale ese día${moved.box === "REARM" || moved.box === "NEW_LABEL" ? ": " : ", "}${gfDateBoxText(moved.box)}.`, programChanged };
     if (!moved.ok && moved.code === "ASSIGNED_TO_RIDER") return { notice: saved, error: gfGuideAssignedMessage(code), href, programChanged };
   }
   const cancelled: string[] = [];

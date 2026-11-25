@@ -16,6 +16,7 @@ import {
   setSocialAccountStore,
   setSocialThreadStatus,
   suggestSocialReply,
+  answerSocialThreadWithAi,
   answerPendingSocialWithAi,
   syncZernioInbox,
   type SocialAutoSettingsView,
@@ -27,6 +28,7 @@ import { IconAlert, IconArrowLeft, IconArrowUpRight, IconBot, IconChat, IconChec
 import { cn } from "@/components/ui";
 import { chatbyDayLabel, chatbyLimaDay, chatbyLimaTime } from "@/lib/chatby-conversation";
 import { dmReplyMode, privateReplyAllowed, socialKindLabel, socialPlatformLabel } from "@/lib/social-inbox";
+import { isMetaSystemNotice } from "@/lib/social-ai";
 
 export interface SocialThreadView {
   id: string;
@@ -483,7 +485,12 @@ function ThreadPanel({ thread, storeName, whatsapp, aiReady, onBack, onChanged, 
     setFeedback(null);
     startSend(async () => {
       const res = await replySocialThread(thread.id, text, mode);
-      if (res.ok) { setText(""); setFeedback({ ok: true, text: res.notice ?? "Enviado." }); }
+      if (res.ok && mode === "public" && canPrivate) {
+        // Un comentario se responde en público y por privado (owner, 25-11-2026): sigue el privado.
+        setMode("private");
+        setText(suggestion?.private ?? "");
+        setFeedback({ ok: true, text: "Enviado en público. Ahora el privado." });
+      } else if (res.ok) { setText(""); setFeedback({ ok: true, text: res.notice ?? "Enviado." }); }
       else setFeedback({ ok: false, text: res.error });
       await load();
       onChanged();
@@ -497,6 +504,18 @@ function ThreadPanel({ thread, storeName, whatsapp, aiReady, onBack, onChanged, 
       if (!res.ok) { setFeedback({ ok: false, text: res.error }); return; }
       onChanged();
       if (closing) onResolved();
+    });
+  }
+
+  /** «Responder con IA»: la IA contesta y envía ya (comentario: público y privado). */
+  function answerWithAi() {
+    setFeedback(null);
+    startSuggest(async () => {
+      const res = await answerSocialThreadWithAi(thread.id);
+      setFeedback(res.ok ? { ok: true, text: res.notice ?? "Respondido." } : { ok: false, text: res.error });
+      if (res.ok) { setText(""); setSuggestion(null); }
+      await load();
+      onChanged();
     });
   }
 
@@ -661,8 +680,13 @@ function ThreadPanel({ thread, storeName, whatsapp, aiReady, onBack, onChanged, 
               </div>
             )}
             {aiReady && !blocked && (
-              <OpsButton size="sm" variant="ghost" onClick={suggest} disabled={suggesting} title="Claude Haiku 5.5 escribe la respuesta; la revisas y la envías" className="pointer-coarse:h-11">
+              <OpsButton size="sm" onClick={answerWithAi} disabled={suggesting || sending} title={thread.kind === "comment" ? "La IA responde y envía ya: en público y por privado" : "La IA responde y envía ya"} className="pointer-coarse:h-11">
                 <IconBot />
+                {suggesting ? "Respondiendo…" : "Responder con IA"}
+              </OpsButton>
+            )}
+            {aiReady && !blocked && (
+              <OpsButton size="sm" variant="ghost" onClick={suggest} disabled={suggesting} title="Claude Haiku 5.5 escribe la respuesta; la revisas y la envías" className="pointer-coarse:h-11">
                 {suggesting ? "Escribiendo…" : "Sugerir con IA"}
               </OpsButton>
             )}
@@ -716,6 +740,14 @@ function ModeOption({ label, active, onClick, disabled, title }: { label: string
 }
 
 function MessageBubble({ m }: { m: SocialMessageView }) {
+  if (m.direction === "in" && isMetaSystemNotice(m.text)) {
+    // Un aviso de Meta, no un mensaje de la clienta.
+    return (
+      <li className="px-6 text-center text-xs leading-4 text-ink-500">
+        <span className="font-medium text-ink-600">Aviso de Meta:</span> {m.text!.replace(/\(https?:\/\/\S+\)/g, "").replace(/\s*Ver comentario\s*$/i, "").trim()}
+      </li>
+    );
+  }
   const out = m.direction === "out";
   const who = out
     ? m.via === "kapta" ? (m.sentByName ?? "Kapta") : m.via === "auto" ? "Respuesta automática" : "Desde Meta"

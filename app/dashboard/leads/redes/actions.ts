@@ -14,7 +14,7 @@ import { applySocialEvent, upsertSocialAccount } from "@/lib/social-inbox-store"
 import { sendSocial } from "@/lib/social-send";
 import { zernio, zernioConfigured, ZernioError } from "@/lib/zernio";
 import { socialAiConfigured } from "@/lib/social-ai-server";
-import { answerPendingWithAi, draftAiReply, loadAutoThread, storeWhatsappPhone, type PendingAiResult } from "@/lib/social-auto-server";
+import { answerOneWithAi, answerPendingWithAi, draftAiReply, loadAutoThread, storeWhatsappPhone, type PendingAiResult } from "@/lib/social-auto-server";
 
 const PATH = "/dashboard/leads/redes";
 const MAX_TEXT = 1000;
@@ -289,10 +289,31 @@ export async function answerPendingSocialWithAi(): Promise<{ ok: true; result: P
   if (!socialAiConfigured()) return { ok: false, error: "Falta la clave de la IA (ANTHROPIC_API_KEY en Vercel)." };
   if (!zernioConfigured()) return { ok: false, error: "Falta conectar Zernio (ZERNIO_API_KEY en Vercel)." };
   const sb = await createServerSupabase();
+  const { data: { user } } = await sb.auth.getUser();
   const { data: stores } = await sb.from("stores").select("id");
-  const result = await answerPendingWithAi(createAdminSupabase(), ((stores as Array<{ id: string }> | null) ?? []).map((s) => s.id));
+  // Lo que quien aprieta el botón tiene abierto no frena a la IA; lo de otra asesora, sí.
+  const result = await answerPendingWithAi(createAdminSupabase(), ((stores as Array<{ id: string }> | null) ?? []).map((s) => s.id), user?.id ?? null);
   revalidatePath(PATH);
   return { ok: true, result };
+}
+
+/**
+ * «Responder con IA» en una conversación: la IA la contesta y la envía ya
+ * (comentario: público y privado; mensaje directo: dentro de 24 h). Misma regla
+ * que «Responder pendientes con IA». Lo usa quien ve el hilo.
+ */
+export async function answerSocialThreadWithAi(threadId: string): Promise<Result> {
+  if (!socialAiConfigured()) return { ok: false, error: "Falta la clave de la IA (ANTHROPIC_API_KEY en Vercel)." };
+  if (!zernioConfigured()) return { ok: false, error: "Falta conectar Zernio (ZERNIO_API_KEY en Vercel)." };
+  const got = await sessionThread(threadId);
+  if ("error" in got) return { ok: false, error: got.error };
+  const { outcome, error } = await answerOneWithAi(createAdminSupabase(), threadId, got.userId);
+  revalidatePath(PATH);
+  if (outcome === "respondida") return { ok: true, notice: got.thread.kind === "comment" ? "Respondido en público y por privado." : "Respondido." };
+  if (outcome === "fuera_de_ventana") return { ok: false, error: "Meta no deja escribirle ahora (pasaron más de 24 h o la persona no recibe mensajes). Escríbele tú si aún se puede." };
+  if (outcome === "tomada") return { ok: false, error: "La está atendiendo otra asesora." };
+  if (outcome === "omitida") return { ok: false, error: "No hay nada que responder: lo último ya lo respondió la tienda, o es solo emojis o una etiqueta." };
+  return { ok: false, error: error ?? "La IA no pudo responder ahora." };
 }
 
 export interface SocialAutoSettingsView {

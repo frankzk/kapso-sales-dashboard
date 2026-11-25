@@ -14,7 +14,7 @@ import { wooGetPage } from "@/lib/woocommerce";
 import { withWooAuthFallback } from "@/lib/woocommerce-intake";
 import { zernioConfigured } from "@/lib/zernio";
 import { generateSocialAiReply, socialAiConfigured, storeCatalog } from "@/lib/social-ai-server";
-import type { SocialAiReply } from "@/lib/social-ai";
+import { isMetaSystemNotice, isUnreachableError, type SocialAiReply } from "@/lib/social-ai";
 
 export async function loadAutoSettings(admin: SupabaseClient, storeId: string): Promise<SocialAutoSettings | null> {
   const { data } = await admin.from("social_auto_settings").select("enabled,comment_keywords,public_text,private_text,dm_text").eq("store_id", storeId).maybeSingle();
@@ -121,9 +121,16 @@ export async function draftAiReply(admin: SupabaseClient, thread: AutoThread, ph
   const link = whatsappLink(phone, adProduct.title ? `Hola, quiero ${adProduct.title}` : "Hola, vengo de redes y quiero información");
   if (!link) return null;
   const history = ((rows as Array<{ direction: "in" | "out"; text: string | null }> | null) ?? [])
-    .reverse().filter((m) => m.text?.trim()).map((m) => ({ from: m.direction === "in" ? "cliente" as const : "tienda" as const, text: m.text! }));
+    .reverse().filter((m) => m.text?.trim() && !isMetaSystemNotice(m.text)).map((m) => ({ from: m.direction === "in" ? "cliente" as const : "tienda" as const, text: m.text! }));
   if (!history.length || history[history.length - 1]!.from !== "cliente") return "sin_turno";
+  let privateAvailable: boolean | undefined;
+  if (thread.kind === "comment") {
+    const { data: firstIn } = await admin.from("social_messages").select("occurred_at").eq("thread_id", thread.id)
+      .eq("direction", "in").order("occurred_at").limit(1).maybeSingle();
+    privateAvailable = privateReplyAllowed({ kind: "comment", private_reply_at: thread.private_reply_at }, (firstIn as { occurred_at: string } | null)?.occurred_at ?? null);
+  }
   return generateSocialAiReply({
+    privateAvailable,
     storeName: (store as { name: string } | null)?.name ?? "la tienda",
     platform: thread.platform, kind: thread.kind, whatsapp: link, catalog,
     adProduct: adProduct.title ? { name: adProduct.title, price: adProduct.price } : null,
@@ -134,6 +141,27 @@ export async function draftAiReply(admin: SupabaseClient, thread: AutoThread, ph
 /** El hilo con lo que necesita lo automático. */
 export async function loadAutoThread(admin: SupabaseClient, threadId: string): Promise<AutoThread | null> {
   return loadThread(admin, threadId);
+}
+
+/**
+ * ¿Meta ya dijo que no deja escribirle a esta persona? (#551 «no está disponible»,
+ * o la ventana de 24 h cerrada). Entonces la IA no lo vuelve a intentar: lo ve
+ * una asesora.
+ */
+async function metaRefusedBefore(admin: SupabaseClient, threadId: string): Promise<boolean> {
+  const { data } = await admin.from("social_messages").select("error,created_at").eq("thread_id", threadId)
+    .eq("direction", "out").eq("status", "fallo").order("created_at", { ascending: false }).limit(5);
+  const lastIn = await lastRealInboundAt(admin, threadId);
+  return ((data as Array<{ error: string | null; created_at: string }> | null) ?? [])
+    .some((m) => isUnreachableError(m.error) && (!lastIn || Date.parse(m.created_at) > Date.parse(lastIn)));
+}
+
+/** El último mensaje de verdad de la clienta (sin los avisos que mete Meta). */
+async function lastRealInboundAt(admin: SupabaseClient, threadId: string): Promise<string | null> {
+  const { data } = await admin.from("social_messages").select("text,occurred_at").eq("thread_id", threadId)
+    .eq("direction", "in").order("occurred_at", { ascending: false }).limit(10);
+  const row = ((data as Array<{ text: string | null; occurred_at: string }> | null) ?? []).find((m) => !isMetaSystemNotice(m.text));
+  return row?.occurred_at ?? null;
 }
 
 /** La IA: null si no pudo responder (se cae a los textos fijos); [] si decidió no responder o no le toca. */
@@ -153,6 +181,7 @@ async function runAi(admin: SupabaseClient, ev: Exclude<NormalizedEvent, { kind:
   }
   const claimedAt = Date.parse(thread.claimed_at ?? "");
   if (thread.claimed_by && Number.isFinite(claimedAt) && Date.now() - claimedAt < HUMAN_HOLD_MS) return [];
+  if (ev.kind === "dm" && (isMetaSystemNotice(ev.message.text) || await metaRefusedBefore(admin, thread.id))) return [];
 
   const draft = await draftAiReply(admin, thread, phone);
   if (draft === "sin_turno") return [];
@@ -232,46 +261,74 @@ export interface PendingAiResult {
  * asesora abrió hace menos de 10 minutos. Las llaves son las de lo automático:
  * nada sale dos veces.
  */
-export async function answerPendingWithAi(admin: SupabaseClient, storeIds: string[]): Promise<PendingAiResult> {
+export type AiAnswerOutcome = "respondida" | "omitida" | "fuera_de_ventana" | "tomada" | "fallida";
+
+/**
+ * Responde UNA conversación con la IA (la usa «Responder pendientes con IA» y el
+ * botón «Responder con IA» del hilo). Comentario: público y privado (el privado
+ * si aún se puede). Mensaje directo: solo dentro de las 24 h. `actorId` es quien
+ * lo pide: su propia reserva no frena a la IA; la de otra asesora, sí.
+ */
+export async function answerOneWithAi(admin: SupabaseClient, threadId: string, actorId: string | null, phones = new Map<string, string | null>()): Promise<{ outcome: AiAnswerOutcome; error?: string }> {
+  const thread = await loadThread(admin, threadId);
+  if (!thread?.store_id) return { outcome: "fallida", error: "La conversación no tiene tienda." };
+  if (thread.kind === "dm") {
+    // La ventana cuenta desde el último mensaje de verdad (no los avisos de Meta), y si Meta ya dijo que no, no se insiste.
+    const realIn = await lastRealInboundAt(admin, thread.id);
+    if (dmReplyMode(realIn) !== "libre" || await metaRefusedBefore(admin, thread.id)) return { outcome: "fuera_de_ventana" };
+  }
+  const claimedAt = Date.parse(thread.claimed_at ?? "");
+  if (thread.claimed_by && thread.claimed_by !== actorId && Number.isFinite(claimedAt) && Date.now() - claimedAt < HUMAN_HOLD_MS) return { outcome: "tomada" };
+  if (!phones.has(thread.store_id)) phones.set(thread.store_id, await storeWhatsappPhone(admin, thread.store_id));
+  const draft = await draftAiReply(admin, thread, phones.get(thread.store_id) ?? null);
+  if (draft === "sin_turno" || draft?.skip) return { outcome: "omitida" };
+  if (!draft) return { outcome: "fallida", error: "La IA no pudo responder ahora." };
+  const { data: lastIn } = await admin.from("social_messages").select("external_id,occurred_at").eq("thread_id", thread.id)
+    .eq("direction", "in").order("occurred_at", { ascending: false }).limit(1).maybeSingle();
+  const last = lastIn as { external_id: string | null; occurred_at: string } | null;
+  let sent = false;
+  let error: string | undefined;
+  if (thread.kind === "comment") {
+    // Los dos: el público y el privado (owner, 25-11-2026). Una respuesta nueva de la clienta lleva llave nueva.
+    const suffix = last?.external_id && last.external_id !== thread.external_id ? `:${last.external_id}` : "";
+    if (draft.publicText) {
+      const r = await sendSocial(admin, thread, { text: draft.publicText, mode: "public", userId: null, via: "auto", idempotencyKey: `ai:pub:${thread.external_id}${suffix}` });
+      if (r.ok) sent = true; else error = r.error;
+    }
+    // Los 7 días cuentan desde el comentario (no desde que Kapta lo trajo).
+    const { data: firstIn } = await admin.from("social_messages").select("occurred_at").eq("thread_id", thread.id)
+      .eq("direction", "in").order("occurred_at").limit(1).maybeSingle();
+    const commentAt = (firstIn as { occurred_at: string } | null)?.occurred_at ?? null;
+    if (draft.privateText && privateReplyAllowed({ kind: "comment", private_reply_at: thread.private_reply_at }, commentAt)) {
+      const r = await sendSocial(admin, thread, { text: draft.privateText, mode: "private", userId: null, via: "auto", idempotencyKey: `ai:priv:${thread.external_id}` });
+      if (r.ok) sent = true; else error = r.error;
+    }
+  } else if (draft.privateText) {
+    const key = `ai:dm:${last?.external_id ?? `${thread.id}:${last?.occurred_at ?? ""}`}`;
+    const r = await sendSocial(admin, thread, { text: draft.privateText, mode: "dm", userId: null, via: "auto", idempotencyKey: key });
+    if (r.ok) sent = true; else error = r.error;
+  }
+  return sent ? { outcome: "respondida" } : { outcome: "fallida", error };
+}
+
+export async function answerPendingWithAi(admin: SupabaseClient, storeIds: string[], actorId: string | null = null): Promise<PendingAiResult> {
   const out: PendingAiResult = { respondidas: 0, omitidas: 0, fueraDeVentana: 0, tomadas: 0, fallidas: 0 };
   if (!storeIds.length || !socialAiConfigured() || !zernioConfigured()) return out;
-  const { data } = await admin.from("social_threads").select("id,kind,last_inbound_at")
+  const { data } = await admin.from("social_threads").select("id")
     .in("store_id", storeIds).eq("status", "abierto").eq("last_direction", "in")
     .order("last_message_at", { ascending: false }).limit(80);
-  const rows = (data as Array<{ id: string; kind: "dm" | "comment"; last_inbound_at: string | null }> | null) ?? [];
+  const queue = ((data as Array<{ id: string }> | null) ?? []).map((r) => r.id);
   const phones = new Map<string, string | null>();
-  const queue = [...rows];
   const worker = async () => {
-    for (let row = queue.shift(); row; row = queue.shift()) {
-      if (row.kind === "dm" && dmReplyMode(row.last_inbound_at) !== "libre") { out.fueraDeVentana++; continue; }
-      const thread = await loadThread(admin, row.id);
-      if (!thread?.store_id) { out.fallidas++; continue; }
-      const claimedAt = Date.parse(thread.claimed_at ?? "");
-      if (thread.claimed_by && Number.isFinite(claimedAt) && Date.now() - claimedAt < HUMAN_HOLD_MS) { out.tomadas++; continue; }
-      if (!phones.has(thread.store_id)) phones.set(thread.store_id, await storeWhatsappPhone(admin, thread.store_id));
-      const draft = await draftAiReply(admin, thread, phones.get(thread.store_id) ?? null);
-      if (draft === "sin_turno" || draft?.skip) { out.omitidas++; continue; }
-      if (!draft) { out.fallidas++; continue; }
-      const { data: lastIn } = await admin.from("social_messages").select("external_id,occurred_at").eq("thread_id", thread.id)
-        .eq("direction", "in").order("occurred_at", { ascending: false }).limit(1).maybeSingle();
-      const last = lastIn as { external_id: string | null; occurred_at: string } | null;
-      let sent = false;
-      if (thread.kind === "comment") {
-        if (draft.publicText) sent = (await sendSocial(admin, thread, { text: draft.publicText, mode: "public", userId: null, via: "auto", idempotencyKey: `ai:pub:${thread.external_id}` })).ok || sent;
-        // Los 7 días cuentan desde el comentario (no desde que Kapta lo trajo).
-        const { data: firstIn } = await admin.from("social_messages").select("occurred_at").eq("thread_id", thread.id)
-          .eq("direction", "in").order("occurred_at").limit(1).maybeSingle();
-        const commentAt = (firstIn as { occurred_at: string } | null)?.occurred_at ?? null;
-        if (draft.privateText && privateReplyAllowed({ kind: "comment", private_reply_at: thread.private_reply_at }, commentAt)) {
-          sent = (await sendSocial(admin, thread, { text: draft.privateText, mode: "private", userId: null, via: "auto", idempotencyKey: `ai:priv:${thread.external_id}` })).ok || sent;
-        }
-      } else if (draft.privateText) {
-        const key = `ai:dm:${last?.external_id ?? `${thread.id}:${last?.occurred_at ?? ""}`}`;
-        sent = (await sendSocial(admin, thread, { text: draft.privateText, mode: "dm", userId: null, via: "auto", idempotencyKey: key })).ok;
-      }
-      if (sent) out.respondidas++; else out.fallidas++;
+    for (let id = queue.shift(); id; id = queue.shift()) {
+      const { outcome } = await answerOneWithAi(admin, id, actorId, phones);
+      if (outcome === "respondida") out.respondidas++;
+      else if (outcome === "omitida") out.omitidas++;
+      else if (outcome === "fuera_de_ventana") out.fueraDeVentana++;
+      else if (outcome === "tomada") out.tomadas++;
+      else out.fallidas++;
       // Sin ráfagas: una pausa entre envíos para no parecer spam ante Meta.
-      await new Promise((r) => setTimeout(r, BULK_PAUSE_MS));
+      if (outcome === "respondida" || outcome === "fallida") await new Promise((r) => setTimeout(r, BULK_PAUSE_MS));
     }
   };
   await Promise.all([worker(), worker(), worker()]);

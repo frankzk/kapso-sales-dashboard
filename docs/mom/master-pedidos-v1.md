@@ -17905,6 +17905,26 @@ estructurada (`lib/social-ai.ts`, `lib/social-ai-server.ts`):
   políticas de Meta siempre, para no incurrir en baneos»).
   Al terminar dice cuántas respondió, cuántas quedan para las asesoras, cuántas
   omitió y cuántas fallaron.
+- **Lo que Meta rechaza no se reintenta (primera pasada, 25-11-2026: 7 de 11
+  mensajes directos salieron; 3 Meta los rechazó con #551 «esta persona no está
+  disponible» —bloqueó la página o no recibe mensajes— y 1 con la ventana de 24
+  h cerrada en un chat que Meta abrió solo por un comentario).** Los avisos que
+  mete Meta («Facebook creó este chat porque…», «Estás respondiendo el
+  comentario…») no cuentan como mensaje de la clienta: no abren la ventana ni
+  ponen la conversación en «Por responder», y en el hilo se leen como «Aviso de
+  Meta» (`isMetaSystemNotice`). Si Meta ya rechazó un envío a esa persona por
+  #551 o por la ventana, la IA no vuelve a intentarlo hasta que la clienta
+  escriba de nuevo (`isUnreachableError`); queda para las asesoras. Un
+  comentario que ya no admite privado recibe solo la respuesta pública, completa
+  y sin prometer «te escribimos por interno». La IA habla como la tienda: no
+  menciona el catálogo ni lo que sabe o no sabe.
+- **La reserva propia no frena a la IA (25-11-2026, el comentario de Cesar
+  Alegre quedó sin responder porque quien apretó el botón lo tenía abierto).**
+  «Responder pendientes con IA» salta solo lo que otra asesora abrió hace menos
+  de 10 minutos. En cada conversación, **«Responder con IA»** la contesta y la
+  envía ya con la misma regla (comentario: público y privado; mensaje directo:
+  dentro de 24 h; `answerOneWithAi`). A mano, después de enviar el público de un
+  comentario, la respuesta pasa sola a «Por privado» para mandar el privado.
 
 Implementación: `lib/zernio.ts` (cliente), `lib/social-inbox.ts` (lectura de
 avisos y plazos de Meta, puro), `lib/zernio-signature.ts`,
@@ -21257,6 +21277,15 @@ en el historial «GF Courier: asignado a Alexis para la ruta del 18/11». Si la 
 **todavía no tiene motorizado**, Kapta le cambia la fecha en GF (`POST /v1/orders/{tracking}/delivery-date`,
 `changeGfGuideDateFor`): misma guía, caja armada, sin anular ni rearmar. Si GF responde que ya está asignada, se dice
 y no se crea otra; si no puede por otra causa (reprogramación abierta), sigue el camino de anular y crear.
+
+**La caja guardada en GF se arma de nuevo cuando la fecha la pide Kapta (owner, 25-11-2026, #KP207634, #KP207294 y
+#AUR901232: «los que vienen de Repro Lima y el origen es Kapta deberían ir a Por preparar» → «se desarma y se arma de
+nuevo»).** Si la caja ya volvió de una visita fallida y quedó guardada en el almacén de GF, al pedirle Kapta la nueva
+fecha GF la da por desarmada y ese día el pedido entra a **Por preparar** en GF, como uno más (misma guía de GF, caja
+y rótulo nuevos). GF lo dice en la respuesta (`box: REARM`) y Kapta lo escribe tal cual en la Actividad y en el aviso
+de Repro Lima: «…ahora sale ese día: GF desarma la caja guardada y ese día la arma de nuevo (Por preparar)», en vez de
+«con la misma guía y la caja armada» (`gfDateBoxText`). Los que oficina reprograma desde el Cierre del motorizado de GF
+para el mismo día van directo a **Por asignar** con la misma guía; eso es de GF y Kapta solo recibe el cambio de fecha.
 
 **El día del acuerdo de Repro Lima manda (owner, 16-11-2026: «ella lo quiere para el 18»).** Al guardar un acuerdo
 con GF Courier, Kapta quita la salida programada de Grupo GF y crea la guía para el día acordado. Si esa creación
