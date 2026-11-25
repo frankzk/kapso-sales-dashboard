@@ -207,9 +207,15 @@ export function AutomationsPanel({ orgs, writable }: { orgs: AutomationsOrgView[
           </p>
         </div>
         {/* MOM §42: los tokens con los que un agente de IA (Grok Bot) consulta Kapta. */}
-        <Link href="/dashboard/automatizaciones/conector" className={opsButtonClass("secondary", "md", "pointer-coarse:h-11")}>
-          Conector de IA
-        </Link>
+        <div className="flex flex-wrap gap-2">
+          <Link href="/dashboard/automatizaciones/conector" className={opsButtonClass("secondary", "md", "pointer-coarse:h-11")}>
+            Conector de IA
+          </Link>
+          {/* MOM §46: los clientes que aceptaron publicidad en Shopify, a Resend. */}
+          <Link href="/dashboard/automatizaciones/correo" className={opsButtonClass("secondary", "md", "pointer-coarse:h-11")}>
+            Correo · Resend
+          </Link>
+        </div>
         {orgs.length > 1 && (
           <label className="flex items-center gap-2 text-[13px] font-medium text-ink-600">
             Organización
