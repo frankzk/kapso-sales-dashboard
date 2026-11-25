@@ -6106,6 +6106,28 @@ la pestaña con el aviso. Guardar exige el candado vivo y el mismo episodio (`li
 Grupo GF sigue tomando, programando y asignando el pedido. «Ver acuerdo» y
 «Cerrados» se abren solo para leer, sin candado.
 
+**Cuándo se vuelve a leer la lista (owner, 25-11-2026: «Repro Lima carga
+demasiado lento»).** Medido el 24-11-2026: 1.056 lecturas enteras de la
+pantalla en un día, cada una con los 1.157 pedidos pendientes de Lima (2 a
+2,6 s con el sistema tranquilo, 5 a 8,7 s cuando coincidían varias personas),
+porque abrir una ficha, cerrarla y guardar la volvían a pedir, y guardar la
+pedía tres veces. Desde entonces:
+- **Tomar y soltar el caso no vuelven a pedir la lista.** La fila dice «Lo
+  atiendes tú» por lo que la ficha de esa pestaña tiene tomado, no por la
+  última lectura; «Diana lo atiende» sí viene de la última lectura. El candado
+  de la base sigue siendo quien impide atender dos a la vez: si la lista estaba
+  vieja y otra persona ya lo tiene (o lo cerró), «Atender» lo dice, abre la
+  hoja para leer y **ahí sí** relee la lista.
+- **Guardar la trae una sola vez**, en la misma respuesta del guardado: la
+  llamada de la hoja, «Programar» de la fila, «No se entregó» y la guía rápida.
+  La ficha y el tablero no la piden otra vez; «Guardar y pasar al siguiente»
+  tampoco al tomar el siguiente.
+- **Al volver a la pestaña** se relee si pasaron 20 segundos desde la última
+  lectura, venga de donde venga.
+- Los lotes («Aprobar elegidos», «Programar» elegidos) la releen al terminar.
+- No cambia ninguna regla: ni el candado, ni el episodio, ni qué se puede
+  atender. Solo cuándo se lee.
+
 **Cuatro listas: etiquetas de pantalla, no subetapas.** «Por decidir»,
 «Llamar después», «Programados» y «Cerrados» se derivan del caso, del Master y
 del programa de Grupo GF. Ninguna es una subetapa: el pedido sigue en «En curso

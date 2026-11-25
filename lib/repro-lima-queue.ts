@@ -78,3 +78,74 @@ export function reproLimaHandoff(orderId: string): ReproLimaHandoff | null {
 export function clearReproLimaHandoff(orderId: string): void {
   if (handoff?.orderId === orderId) handoff = null;
 }
+
+// ---------------------------------------------------------------------------
+// El caso que ESTA pestaña tiene tomado
+//
+// Tomar y soltar un caso ya no vuelve a pedir la pantalla (owner, 25-11-2026:
+// «Repro Lima carga demasiado lento»; medido el 24-11, cada ficha abierta y
+// cada ficha cerrada era una lectura entera de los 1.157 pedidos de Lima). La
+// fila dice «Lo atiendes tú» por lo que la ficha de esta pestaña tiene tomado,
+// no por la última lectura del servidor: esa puede decir «mío» de un caso que
+// ya se soltó, o «libre» de uno recién tomado.
+// ---------------------------------------------------------------------------
+
+let held: ReadonlySet<string> = new Set();
+const claimListeners = new Set<() => void>();
+
+function emitClaims() {
+  for (const listener of claimListeners) listener();
+}
+
+/** La ficha tomó el caso de este pedido. */
+export function holdReproLimaClaim(orderId: string): void {
+  if (held.has(orderId)) return;
+  held = new Set(held).add(orderId);
+  emitClaims();
+}
+
+/** La ficha lo soltó, lo perdió o se cerró. */
+export function dropReproLimaClaim(orderId: string): void {
+  if (!held.has(orderId)) return;
+  const next = new Set(held);
+  next.delete(orderId);
+  held = next;
+  emitClaims();
+}
+
+/** Los pedidos tomados en esta pestaña. El mismo objeto mientras no cambie (`useSyncExternalStore`). */
+export function reproLimaHeldClaims(): ReadonlySet<string> {
+  return held;
+}
+
+export function subscribeReproLimaClaims(listener: () => void): () => void {
+  claimListeners.add(listener);
+  return () => {
+    claimListeners.delete(listener);
+  };
+}
+
+/**
+ * Lo que la fila enseña del candado. «Mío» es lo que esta pestaña tiene
+ * tomado; «otro» siempre viene de la lectura del servidor (y el candado de la
+ * base es quien impide atender dos a la vez). Puro.
+ */
+export function localClaimView<V extends string>(server: V, heldHere: boolean): V | "mio" | "libre" {
+  if (heldHere) return "mio";
+  return server === "mio" ? "libre" : server;
+}
+
+/**
+ * Las filas con el candado de esta pestaña encima. Devuelve la MISMA lista si
+ * ninguna cambia, para no rehacer lo que depende de ella. Puro.
+ */
+export function withLocalClaims<R extends { orderId: string; claim: { view: string } }>(rows: readonly R[], heldHere: ReadonlySet<string>): readonly R[] {
+  let changed = false;
+  const next = rows.map((row) => {
+    const view = localClaimView(row.claim.view, heldHere.has(row.orderId));
+    if (view === row.claim.view) return row;
+    changed = true;
+    return { ...row, claim: { ...row.claim, view } } as R;
+  });
+  return changed ? next : rows;
+}

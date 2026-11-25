@@ -187,7 +187,11 @@ export async function claimReproCase(orderId: string, opts: { reopen?: boolean }
     });
     if (error) return { error: error.message };
     const claim = data as { case_id?: string | null; claimed: boolean; until?: string | null; holder?: string | null; needs_reopen?: boolean };
-    revalidatePath(REPRO_LIMA_PATH);
+    // Tomar el caso NO vuelve a pedir la pantalla (25-11-2026): la fila se
+    // marca en el navegador (`holdReproLimaClaim`). Solo se relee cuando la
+    // lista estaba vieja: otra persona lo cerró o lo tiene tomado.
+    const listWasStale = Boolean(claim.needs_reopen) || !claim.claimed || !claim.case_id;
+    if (listWasStale) revalidatePath(REPRO_LIMA_PATH);
     if (claim.needs_reopen) return { error: NEEDS_REOPEN, needsReopen: true };
     if (!claim.claimed || !claim.case_id) {
       const name = claim.holder ? await resolveAgentName(claim.holder, admin) : null;
@@ -222,7 +226,11 @@ export async function renewReproCase(caseId: string): Promise<{ until: string } 
   return { until };
 }
 
-/** «Soltar» o cerrar la hoja: suelta SOLO el candado propio. */
+/**
+ * «Soltar» o cerrar la hoja: suelta SOLO el candado propio. No revalida la
+ * página (25-11-2026): soltar no cambia nada que la lista tenga que releer, y
+ * la fila deja de decir «Lo atiendes tú» en el navegador (`dropReproLimaClaim`).
+ */
 export async function releaseReproCase(caseId: string): Promise<ReproActionResult> {
   const scope = await requireReproLima();
   if ("error" in scope) return { error: scope.error };
@@ -234,7 +242,6 @@ export async function releaseReproCase(caseId: string): Promise<ReproActionResul
     .update({ claimed_by: null, claimed_until: null })
     .eq("id", caseId)
     .eq("claimed_by", scope.userId);
-  revalidatePath(REPRO_LIMA_PATH);
   return { notice: "Liberado." };
 }
 
