@@ -482,7 +482,9 @@ describe("el tablero (E31, E33)", () => {
     ]) expect(board + blocksRules).toContain(text);
   });
 
-  it("se relee tras cada acción y al volver a la pestaña", () => {
+  // Desde el 25-11-2026 guardar trae la pantalla en su misma respuesta (test/repro-lima-una-lectura.test.ts):
+  // el tablero solo la pide él mismo tras un lote y al volver a la pestaña.
+  it("se relee tras los lotes y al volver a la pestaña", () => {
     expect(board).toContain("startRefresh(() => router.refresh())");
     expect(board).toContain('window.addEventListener("focus", onFocus);');
   });

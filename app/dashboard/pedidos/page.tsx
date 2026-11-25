@@ -36,6 +36,7 @@ import { MACRO_SUBSTAGES_BY_STAGE, type MacroSubstage } from "@/lib/order-macro-
 import { EmptyState } from "@/components/ui";
 import { OrdersMasterBoard } from "@/components/orders-master";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
+import { pageLoadTimer } from "@/lib/page-load-log";
 
 export const dynamic = "force-dynamic";
 
@@ -68,6 +69,8 @@ async function PedidosContent({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  // Una línea por carga en los logs (lib/page-load-log.ts): solo tiempos y conteos.
+  const load = pageLoadTimer("pedidos");
   const [sp, stores, perms, adminOrgs] = await Promise.all([
     searchParams,
     getAccessibleStores(),
@@ -100,17 +103,17 @@ async function PedidosContent({
   // `order_payments` por carga. Decora las filas de la página, cuenta la
   // píldora y resuelve el filtro. Solo cuando el filtro está puesto hay que
   // esperarla antes de consultar el Master; si no, corre a la par.
-  const pendingPromise = getPendingVoucherIndex(storeIds);
+  const pendingPromise = load.timed("comprobantes", getPendingVoucherIndex(storeIds));
   // «Pagado sin aviso» (MOM §12), con el mismo patrón: dos lecturas por carga
   // (candidatos del Master y sus avisos), a la par salvo que el filtro esté puesto.
-  const paidUnnotifiedPromise = getPaidUnnotifiedIds(storeIds);
+  const paidUnnotifiedPromise = load.timed("pagadoSinAviso", getPaidUnnotifiedIds(storeIds));
   // «Programado sin ubicación» (MOM §6.2): UNA lectura de ids, a la par. Su
   // filtro va por columnas del Master y no necesita esperarla.
-  const scheduledNoLocationPromise = getScheduledNoLocationIds(storeIds);
+  const scheduledNoLocationPromise = load.timed("sinUbicacion", getScheduledNoLocationIds(storeIds));
   // «Producto» (0300): las opciones salen cacheadas y a la par. Solo con el
   // filtro puesto hay que esperarlas: si no respondieron (la 0300 sin aplicar),
   // el filtro se quita en vez de pedirle a la base una columna que no existe.
-  const productOptionsPromise = getMasterProductOptionsCached(storeIds);
+  const productOptionsPromise = load.timed("productos", getMasterProductOptionsCached(storeIds));
   const withProducts = urlFilters.products.size
     ? withAvailableProductFilter(urlFilters, await productOptionsPromise)
     : urlFilters;
@@ -132,20 +135,20 @@ async function PedidosContent({
   const showConfirmation = !searching && view === "por_confirmar";
   const [momCounts, pageData, facets, agency, confirmationCounts, cycleDays, productOptions, pendingVouchers, paidUnnotified, districtReview, scheduledNoLocation] = await Promise.all([
     // Con filtros, las pestañas cuentan lo mismo que la lista (MOM §6).
-    searching
+    load.timed("contadores", searching
       ? Promise.resolve(EMPTY_MOM_COUNTS)
       : hasActiveFilters(filters)
         ? getOrderMasterFilteredMomCounts(storeIds, { filters, view })
-        : getOrderMasterMomCounts(storeIds),
-    getOrderMasterPage(storeIds, { view, substage, filters, sortKey: "created", page }),
+        : getOrderMasterMomCounts(storeIds)),
+    load.timed("pagina", getOrderMasterPage(storeIds, { view, substage, filters, sortKey: "created", page })),
     // Cacheadas: no dependen de lo que se esté filtrando ni buscando.
-    getMasterFacetsCached(storeIds),
-    getAgencySummaryCached(storeIds),
+    load.timed("filtros", getMasterFacetsCached(storeIds)),
+    load.timed("agencias", getAgencySummaryCached(storeIds)),
     // Los chips de «Fecha pactada» y de «Gestión» salen de UNA lectura (antes
     // eran doce conteos por carga).
-    showConfirmation
+    load.timed("confirmacion", showConfirmation
       ? getConfirmationQueueCounts(storeIds, { substage, filters })
-      : Promise.resolve(emptyConfirmationQueueCounts()),
+      : Promise.resolve(emptyConfirmationQueueCounts())),
     showConfirmation
       ? getConfirmationCycleDays(storeIds)
       : Promise.resolve({} as Record<string, number>),
@@ -155,7 +158,7 @@ async function PedidosContent({
     // «Distrito por revisar» (MOM §19.0.3): dos lecturas por carga, a la par
     // (los pedidos abiertos de provincia y `peru_districts` de sus provincias,
     // en una consulta). Con búsqueda la píldora no se ve: no se paga.
-    searching ? Promise.resolve(null) : getDistrictReview(storeIds),
+    load.timed("distritos", searching ? Promise.resolve(null) : getDistrictReview(storeIds)),
     scheduledNoLocationPromise,
   ]);
   // La «Lista negra» (MOM §41 y §41.11): UNA lectura para los celulares de la
@@ -175,6 +178,7 @@ async function PedidosContent({
       return null;
     }
   })();
+  load.done({ filas: pageData.rows.length });
   const confirmationDueCounts = showConfirmationDue
     ? confirmationCounts.due
     : emptyConfirmationQueueCounts().due;

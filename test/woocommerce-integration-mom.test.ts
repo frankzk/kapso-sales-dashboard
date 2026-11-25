@@ -162,7 +162,7 @@ describe("DEPLOY.md y los crons", () => {
   it("la foto tiene su cron y la entrada de WooCommerce no agrega ninguno (va dentro del sync); el único de WooCommerce es la revisión de los webhooks", () => {
     const vercel = JSON.parse(read("vercel.json")) as { crons: { path: string; schedule: string }[] };
     expect(vercel.crons.filter((c) => c.path === "/api/cron/invoice-snapshots")).toEqual([
-      { path: "/api/cron/invoice-snapshots", schedule: "1-59/2 * * * *" },
+      { path: "/api/cron/invoice-snapshots", schedule: "2-57/5 * * * *" },
     ]);
     // La entrada de pedidos va dentro de /api/cron/sync. §38.14 revisa webhooks;
     // §38.18 recupera el cierre de stock tras retorno e inventario humanos.

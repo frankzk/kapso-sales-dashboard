@@ -1203,15 +1203,17 @@ export function OrderDrawer({
     if (next && next !== orderId) {
       handOffReproLima(next, { orderName: saved.orderName, text });
       // Sin `router.refresh()` aquí: guardar ya refrescó Repro Lima
-      // (`revalidatePath`) y la ficha del siguiente lo refresca al tomar su
-      // caso. Era una carga entera más (3–5 s) por guardado, a la vez que el
-      // cambio de URL.
+      // (`revalidatePath`). Era una carga entera más (3–5 s) por guardado, a
+      // la vez que el cambio de URL. Tomar el caso del siguiente y soltar
+      // este tampoco la piden desde el 25-11-2026: una lectura por guardado.
       goToNextRepro(saved.orderId, next);
       return;
     }
     if (wantsNext) reportClientPerformanceMetric("repro:next-missing", 0);
     void reload();
-    onSaved();
+    // La pantalla de atrás ya volvió con el guardado; solo se pide si no
+    // (la venta se anuló pero la llamada no llegó a registrarse).
+    if (!saved.refreshed) onSaved();
     setReproSession((current) => ({
       orderId,
       key: current.key + 1,
