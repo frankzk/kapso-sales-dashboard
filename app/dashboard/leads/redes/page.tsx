@@ -4,6 +4,7 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { zernioConfigured } from "@/lib/zernio";
 import { loadAutoSettings, storeWhatsappPhone } from "@/lib/social-auto-server";
+import { socialAiConfigured } from "@/lib/social-ai-server";
 import { DEFAULT_COMMENT_KEYWORDS, DEFAULT_DM_TEXT, DEFAULT_PRIVATE_TEXT, DEFAULT_PUBLIC_TEXT, whatsappLink } from "@/lib/social-auto";
 import { EmptyState } from "@/components/ui";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
@@ -61,6 +62,7 @@ async function RedesContent() {
       stores={stores.map((s) => ({ id: s.id, name: s.name }))}
       canManage={canManage}
       configured={zernioConfigured()}
+      aiReady={socialAiConfigured()}
     />
   );
 }

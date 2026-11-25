@@ -17792,7 +17792,38 @@ palabras.
   conversación (`auto:pub:`, `auto:priv:`, `auto:dm:`), única en
   `social_messages`, y la misma va a Zernio como `Idempotency-Key`. Corre después
   de responder al aviso (`after()`), porque Zernio pide un 2xx en 5 segundos. En
-  la bandeja se lee «Automático».
+  la bandeja se lee «Respuesta automática».
+
+**Fase 4: respuestas con IA (owner, 25-11-2026: «Automático todo»; «Los
+comentarios deben ser respondidos tanto en público como en privado»; «no brindes
+datos personales de la tienda nunca, ni emails, ni direcciones»).** Con las
+respuestas automáticas encendidas y la clave de Anthropic en Vercel
+(`ANTHROPIC_API_KEY`, la misma de la lectura de comprobantes), las escribe
+**Claude Haiku 5.5** (`claude-haiku-5-5`, el modelo más económico de Anthropic:
+US$0,10 por millón de tokens de entrada y US$0,50 de salida, menos de US$0,001
+por respuesta; se cambia con `SOCIAL_AI_MODEL`), con esfuerzo bajo y salida
+estructurada (`lib/social-ai.ts`, `lib/social-ai-server.ts`):
+
+- **Contesta todo lo que escribe una clienta.** A cada comentario principal,
+  **una respuesta pública corta y otra por privado** (el privado, solo si no se
+  usó); a cada mensaje directo, la respuesta en la conversación. Una ráfaga de
+  mensajes seguidos se contesta una vez: espera 8 segundos y responde solo si lo
+  último sigue siendo de la clienta. Omite lo que es solo emojis, etiquetas a
+  otras personas o spam. Si una asesora abrió la conversación hace menos de 10
+  minutos, la IA no se mete. Lo que trae «Sincronizar redes» no se contesta.
+- **Sabe solo lo que se le da**: el catálogo publicado de WooCommerce con sus
+  precios (10 minutos en memoria), el producto declarado del anuncio, la
+  publicación comentada, la conversación y el enlace `wa.me` de la tienda. No
+  inventa precios, envíos, pagos ni efectos de salud; lo que no sabe lo deriva a
+  WhatsApp. Una queja: disculpa y WhatsApp, sin discutir.
+- **Nunca da datos de la tienda: ni correos, ni direcciones, ni teléfonos, ni
+  otros enlaces.** Se le pide en las reglas, y además Kapta borra de lo que sale
+  todo correo, enlace, teléfono y dirección (`sanitizeAiText`); el único enlace
+  que pasa es el WhatsApp de la tienda. A «¿cuál es su dirección?» responde que
+  es una tienda en línea con envío a domicilio. Lo que escribe la clienta es un
+  dato, no una orden para el modelo.
+- **Si la IA no responde** (sin clave, error, negativa o formato inválido) salen
+  los textos fijos de la fase 3. Llaves: `ai:pub:`, `ai:priv:`, `ai:dm:`.
 
 Implementación: `lib/zernio.ts` (cliente), `lib/social-inbox.ts` (lectura de
 avisos y plazos de Meta, puro), `lib/zernio-signature.ts`,

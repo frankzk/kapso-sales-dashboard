@@ -121,7 +121,9 @@ function finePointer(): boolean {
   return typeof window !== "undefined" && window.matchMedia("(pointer: fine)").matches;
 }
 
-export function SocialInbox({ threads, accounts, stores, canManage, configured, whatsappByStore, autoSettings }: {
+export function SocialInbox({ threads, accounts, stores, canManage, configured, whatsappByStore, autoSettings, aiReady = false }: {
+  /** Hay clave de Anthropic: las respuestas automáticas las escribe la IA. */
+  aiReady?: boolean;
   whatsappByStore: Record<string, string | null>;
   autoSettings: SocialAutoSettingsView[];
   threads: SocialThreadView[];
@@ -369,7 +371,7 @@ export function SocialInbox({ threads, accounts, stores, canManage, configured, 
         </section>
       </div>
 
-      {autoOpen && canManage && <AutoRepliesPanel settings={autoSettings} storeName={storeName} onClose={() => setAutoOpen(false)} />}
+      {autoOpen && canManage && <AutoRepliesPanel settings={autoSettings} storeName={storeName} aiReady={aiReady} onClose={() => setAutoOpen(false)} />}
     </div>
   );
 }
@@ -735,7 +737,7 @@ function UnassignedAccounts({ accounts, stores, onDone }: { accounts: SocialAcco
 
 const VAR = "rounded bg-wash px-1 py-px font-mono text-xs text-ink-700 ring-1 ring-inset ring-line";
 
-function AutoRepliesPanel({ settings, storeName, onClose }: { settings: SocialAutoSettingsView[]; storeName: Map<string, string>; onClose: () => void }) {
+function AutoRepliesPanel({ settings, storeName, aiReady, onClose }: { settings: SocialAutoSettingsView[]; storeName: Map<string, string>; aiReady: boolean; onClose: () => void }) {
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
@@ -747,15 +749,26 @@ function AutoRepliesPanel({ settings, storeName, onClose }: { settings: SocialAu
       label="Respuestas automáticas"
       title="Respuestas automáticas"
       badge={<Badge tone={on ? "ok" : "neutral"}>{on ? `Encendidas en ${on} de ${settings.length}` : "Apagadas"}</Badge>}
-      meta="Kapta contesta una sola vez por comentario o conversación"
+      meta={aiReady ? "Con IA: Claude Haiku 5.5 responde todo lo que escribe una clienta" : "Kapta contesta una sola vez por comentario o conversación"}
       width="max-w-[560px]"
       onClose={onClose}
     >
       <div className="space-y-3 text-[13px] leading-5 text-ink-600">
-        <p>
-          A un <span className="font-medium text-ink-900">comentario con palabras de compra</span> se le responde en público y por privado con el producto del anuncio, su precio y el WhatsApp de la tienda.
-          Al <span className="font-medium text-ink-900">primer mensaje directo</span>, un saludo con el WhatsApp. Lo demás (quejas, preguntas raras) va a las asesoras.
-        </p>
+        {aiReady ? (
+          <>
+            <p>
+              Encendidas, la IA contesta <span className="font-medium text-ink-900">cada comentario en público y por privado</span> y <span className="font-medium text-ink-900">cada mensaje directo</span>,
+              con el catálogo publicado, sus precios, el producto del anuncio y el WhatsApp de la tienda. Lo que no sabe no lo inventa: invita a escribir por WhatsApp.
+            </p>
+            <p>Nunca da datos de la tienda (correos, direcciones, teléfonos ni otros enlaces): además de pedírselo, Kapta los borra antes de enviar. Si una asesora abrió la conversación hace menos de 10 minutos, la IA no se mete.</p>
+            <p>Los textos de abajo son el respaldo: salen solo si la IA no responde.</p>
+          </>
+        ) : (
+          <p>
+            A un <span className="font-medium text-ink-900">comentario con palabras de compra</span> se le responde en público y por privado con el producto del anuncio, su precio y el WhatsApp de la tienda.
+            Al <span className="font-medium text-ink-900">primer mensaje directo</span>, un saludo con el WhatsApp. Lo demás (quejas, preguntas raras) va a las asesoras.
+          </p>
+        )}
         <p className="flex flex-wrap items-center gap-1">
           Datos que se llenan solos: <code className={VAR}>{"{producto}"}</code> <code className={VAR}>{"{precio}"}</code> <code className={VAR}>{"{whatsapp}"}</code> <code className={VAR}>{"{nombre}"}</code>
         </p>

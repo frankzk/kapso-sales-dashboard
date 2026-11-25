@@ -120,6 +120,14 @@ Verificar, en Vercel → Logs:
 3. Al día siguiente, las líneas `[repro-lima] carga` de un día deberían ser bastante menos que las 1.056 del 24-11.
 4. `/api/cron/invoice-snapshots` corre en los minutos 2, 7, 12, …
 
+### 25-11-2026 · Leads → Redes: respuestas con IA (Claude Haiku 5.5, MOM §25.4 fase 4)
+
+Sin migración ni variables nuevas: usa `ANTHROPIC_API_KEY`, que ya está en Vercel. Opcional:
+`SOCIAL_AI_MODEL` para cambiar el modelo (por defecto `claude-haiku-5-5`). Con las respuestas automáticas
+encendidas en una tienda, la IA contesta cada comentario (en público y por privado) y cada mensaje directo;
+nunca da correos, direcciones, teléfonos ni otros enlaces de la tienda. Sin la clave, o si la IA falla, salen
+los textos fijos de siempre.
+
 ### 25-11-2026 · Leads → Redes: comentarios y mensajes de Facebook e Instagram por Zernio, con reparto y respuestas automáticas (0354, MOM §25.4)
 
 **Migración `0354_social_inbox.sql`: aplicar en producción ANTES del código.** Crea `social_accounts`,
