@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0355_aliclik_followup_no_touch.sql — anotar que el cierre de Aliclik revisó
+-- 0356_aliclik_followup_no_touch.sql — anotar que el cierre de Aliclik revisó
 -- una guía no es cambiar la guía (MOM §19.2, owner 25-11-2026).
 --
 -- LO QUE SE MIDIÓ (25-11-2026, producción, solo lectura). El cierre de Aliclik

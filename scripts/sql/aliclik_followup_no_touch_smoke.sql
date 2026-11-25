@@ -1,5 +1,5 @@
 \set ON_ERROR_STOP on
--- 0355: los sellos del cierre de Aliclik (MOM §19.2). `aliclik_followup_at` y
+-- 0356: los sellos del cierre de Aliclik (MOM §19.2). `aliclik_followup_at` y
 -- `reason_probed_at` no mueven `shipments.updated_at` ni dejan el pedido
 -- desfasado; un cambio de verdad sí, también junto con un sello; y las reglas
 -- de la 0204 y la 0321 siguen: sus sellos tampoco lo mueven y `last_report_at`

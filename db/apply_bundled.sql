@@ -35623,9 +35623,9 @@ create policy social_messages_select on social_messages for select to authentica
   using (store_id in (select auth_store_ids()));
 -- social_webhook_events: sin política, solo el servidor.
 
--- ---- 0355 ----
+-- ---- 0356 ----
 -- ============================================================================
--- 0355_aliclik_followup_no_touch.sql — anotar que el cierre de Aliclik revisó
+-- 0356_aliclik_followup_no_touch.sql — anotar que el cierre de Aliclik revisó
 -- una guía no es cambiar la guía (MOM §19.2, owner 25-11-2026).
 --
 -- LO QUE SE MIDIÓ (25-11-2026, producción, solo lectura). El cierre de Aliclik

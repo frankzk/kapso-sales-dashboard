@@ -16963,14 +16963,14 @@ precisa es **qué escritura cuenta como cambio de la guía**.
 - **`last_report_at` sí cuenta.** Lo escriben el Excel, Olva y Tanders, y los
   barridos de Olva y Shalom eligen qué guía leer después ordenando por
   `updated_at`: si dejara de moverlo, se quedarían releyendo siempre las mismas.
-- **Los sellos del cierre de Aliclik tampoco son un cambio (0355, owner
+- **Los sellos del cierre de Aliclik tampoco son un cambio (0356, owner
   25-11-2026).** El cierre (`/api/cron/aliclik-close`) anota en cada guía que
   persigue cuándo le preguntó a Aliclik (`aliclik_followup_at`) y cuándo
   consultó el motivo de una devuelta (`reason_probed_at`). Ordenan su propia
   cola y el Master no los lee. Medido el 25-11-2026: de 1.219 guías de Aliclik
   tocadas en tres horas, 997 solo habían recibido ese sello, y cada una dejaba
   su pedido desfasado, recalculado y con la pantalla del Master recargándose.
-  Desde la 0355 una escritura que solo toca esos sellos deja `updated_at` como
+  Desde la 0356 una escritura que solo toca esos sellos deja `updated_at` como
   estaba, igual que los de la API (0204) y los del rastreo de Shalom (0321).
   Prueba: `scripts/sql/aliclik_followup_no_touch_smoke.sql`.
 - **En el Master, un recálculo que no cambia nada tampoco es un cambio.**

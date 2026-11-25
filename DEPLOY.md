@@ -114,15 +114,15 @@ Lo que cambia para el equipo: con Kapta abierto, un aviso vencido pasa a la sigu
 Verificar, en Vercel → Logs: la línea `[collection-alerts] {"stores":…,"resolved":…,"unattributed":…,"moved":…}`
 cada 5 minutos, sin `errors`.
 
-### 25-11-2026 · Los sellos del cierre de Aliclik no cuentan como cambio de la guía (0355, MOM §19.2)
+### 25-11-2026 · Los sellos del cierre de Aliclik no cuentan como cambio de la guía (0356, MOM §19.2)
 
-**Migración 0355** (`db/migrations/0355_aliclik_followup_no_touch.sql`): solo cambia la función del trigger de
+**Migración 0356** (`db/migrations/0356_aliclik_followup_no_touch.sql`): solo cambia la función del trigger de
 `shipments.updated_at` (la de la 0204 y la 0321) para que `aliclik_followup_at` y `reason_probed_at` no lo muevan.
 Sin columnas, índices ni datos nuevos. Se puede desplegar el código **antes o después** de aplicarla: ningún código
 depende de ella. Correrla otra vez no cambia nada. **No se aplica sola**:
 
 ```bash
-psql "$DATABASE_URL" -f db/migrations/0355_aliclik_followup_no_touch.sql
+psql "$DATABASE_URL" -f db/migrations/0356_aliclik_followup_no_touch.sql
 ```
 
 Toma un bloqueo corto sobre `shipments` (el `create or replace` de la función): mejor fuera de horario.

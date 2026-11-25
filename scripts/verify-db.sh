@@ -363,7 +363,7 @@ echo "  ✅ reservada dentro de las 2 h (borde inclusivo) y con mensajes anterio
 echo "▶ Fila del rastreo de Shalom (0321): sello de cuándo se preguntó, racha de not_found, sellos que no mueven updated_at e índice de la fila"
 $PSQL -f "$ROOT/scripts/sql/shalom_checked_at_smoke.sql"
 echo "  ✅ nacen sin sello y con la racha en cero, que no baja de cero; los sellos del rastreo no mueven updated_at (last_report_at y un cambio real sí); la nunca preguntada va primero"
-echo "▶ Sellos del cierre de Aliclik (0355): el turno y la consulta del motivo no mueven updated_at ni dejan el pedido desfasado"
+echo "▶ Sellos del cierre de Aliclik (0356): el turno y la consulta del motivo no mueven updated_at ni dejan el pedido desfasado"
 $PSQL -f "$ROOT/scripts/sql/aliclik_followup_no_touch_smoke.sql"
 echo "  ✅ aliclik_followup_at y reason_probed_at no mueven updated_at (los de la 0204 y la 0321 tampoco); last_report_at y un cambio real sí, también junto con un sello"
 echo "▶ Lo que el agente de IA puede hacer (0323): interruptores en Simulación con topes, acciones y estados cerrados, código de un solo uso como sha256 y solo el servidor"

@@ -294,12 +294,12 @@ las 1.056 lecturas de Repro Lima del 24-11 y los 28.763 recálculos diarios.
 ### Hallazgos nuevos
 
 1. **El cierre de Aliclik tocaba guías que no cambiaron. Confirmado, con su
-   migración lista (0355).** Cada 20 minutos anota en las guías que persigue
+   migración lista (0356).** Cada 20 minutos anota en las guías que persigue
    que ya les preguntó (`aliclik_followup_at`). La base contaba eso como un
    cambio de la guía, el Master recalculaba el pedido y todas las pestañas del
    Master se recargaban. Medido el 25-11: de 1.219 guías de Aliclik tocadas en
    tres horas, 997 solo habían recibido esa anotación. La migración
-   `0355_aliclik_followup_no_touch.sql` aplica la misma regla de la 0204 y la
+   `0356_aliclik_followup_no_touch.sql` aplica la misma regla de la 0204 y la
    0321; se aplica a mano, fuera de horario (DEPLOY.md).
 2. **La foto de pedidos para boletas ya no tenía qué fotografiar. Apagada el
    25-11-2026 por decisión del owner.** La última es del 04-11-2026 y los
@@ -325,6 +325,6 @@ minuto y pico.
 ### Siguiente paso propuesto
 
 1. Medir un día con lo que ya está en producción (desde el 25-11-2026).
-2. Aplicar la migración 0355, fuera de horario.
+2. Aplicar la migración 0356, fuera de horario.
 3. Con los tiempos reales de Leads y del Master, elegir entre los cambios 3,
    4, 5 y 9 de la fase 1.

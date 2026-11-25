@@ -1,7 +1,7 @@
 // Owner, 25-11-2026 (plan de carga, `docs/plan/rendimiento-carga.md`). El cierre de Aliclik anota en cada guía que
 // persigue que ya le preguntó, y la base contaba esa anotación como un cambio de la guía: el pedido quedaba
 // desfasado, el Master lo recalculaba y cada pestaña del Master se recargaba. Medido: de 1.219 guías de Aliclik
-// tocadas en tres horas, 997 solo habían recibido el sello. La 0355 lleva esos dos sellos a la lista de la 0204.
+// tocadas en tres horas, 997 solo habían recibido el sello. La 0356 lleva esos dos sellos a la lista de la 0204.
 // El comportamiento se prueba en la base (`scripts/sql/aliclik_followup_no_touch_smoke.sql`, en verify-db.sh);
 // aquí se vigila que la migración, el cron y los documentos digan lo mismo.
 
@@ -11,14 +11,14 @@ import { describe, expect, it } from "vitest";
 
 const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
 const flat = (text: string) => text.replace(/\s+/g, " ");
-const sql = read("db/migrations/0355_aliclik_followup_no_touch.sql");
+const sql = read("db/migrations/0356_aliclik_followup_no_touch.sql");
 
 /** La lista de columnas que el trigger ignora, tal como aparece en una migración. */
 function ignored(source: string): string[][] {
   return [...source.matchAll(/to_jsonb\((?:new|old)\) - array\[([^\]]+)\]/g)].map((m) => [...m[1]!.matchAll(/'([a-z_]+)'/g)].map((c) => c[1]!));
 }
 
-describe("la 0355: los sellos del cierre de Aliclik no mueven `updated_at`", () => {
+describe("la 0356: los sellos del cierre de Aliclik no mueven `updated_at`", () => {
   it("amplía la lista de la 0321 con los dos sellos, igual para la fila nueva y la vieja", () => {
     const lists = ignored(sql);
     expect(lists).toHaveLength(2);
@@ -70,13 +70,13 @@ describe("la 0355: los sellos del cierre de Aliclik no mueven `updated_at`", () 
 
   it("el MOM y DEPLOY lo cuentan, y la migración no se aplica sola", () => {
     const mom = flat(read("docs/mom/master-pedidos-v1.md"));
-    expect(mom).toContain("- **Los sellos del cierre de Aliclik tampoco son un cambio (0355, owner 25-11-2026).**");
+    expect(mom).toContain("- **Los sellos del cierre de Aliclik tampoco son un cambio (0356, owner 25-11-2026).**");
     expect(mom).toContain("de 1.219 guías de Aliclik tocadas en tres horas, 997 solo habían recibido ese sello");
     const deploy = read("DEPLOY.md");
-    const start = deploy.indexOf("### 25-11-2026 · Los sellos del cierre de Aliclik no cuentan como cambio de la guía (0355, MOM §19.2)");
+    const start = deploy.indexOf("### 25-11-2026 · Los sellos del cierre de Aliclik no cuentan como cambio de la guía (0356, MOM §19.2)");
     expect(start).toBeGreaterThan(-1);
     const entry = flat(deploy.slice(start, deploy.indexOf("\n### ", start + 10)));
-    expect(entry).toContain('psql "$DATABASE_URL" -f db/migrations/0355_aliclik_followup_no_touch.sql');
+    expect(entry).toContain('psql "$DATABASE_URL" -f db/migrations/0356_aliclik_followup_no_touch.sql');
     expect(entry).toContain("Se puede desplegar el código **antes o después** de aplicarla");
     expect(entry).toContain("**No se aplica sola**");
   });
