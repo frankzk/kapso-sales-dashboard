@@ -23,6 +23,7 @@
 // No inventa estados ni salidas, y no toca el programa de Grupo GF fuera del
 // camino del acuerdo.
 
+import { revalidatePath } from "next/cache";
 import { createAdminSupabase } from "@/lib/db";
 import { scheduleOrderDispatch } from "@/app/dashboard/pedidos/actions";
 import { moveReproAgreement, programReproWithoutCall } from "@/app/dashboard/pedidos/repro-lima/actions";
@@ -97,6 +98,15 @@ export async function agendarReproLima(input: {
   /** Un `crypto.randomUUID()` por pedido (el acuerdo registra una llamada). */
   operationId: string;
 }): Promise<AgendarResult> {
+  const result = await agendar(input);
+  // Una lectura por acción (25-11-2026): lo guardado vuelve con la pantalla en
+  // esta misma respuesta y el tablero ya no la pide otra vez. Las acciones de
+  // dentro ya revalidan cuando cambian algo; esto lo deja dicho para todas.
+  if (result.notice) revalidatePath(REPRO_LIMA_PATH);
+  return result;
+}
+
+async function agendar(input: Parameters<typeof agendarReproLima>[0]): Promise<AgendarResult> {
   const scope = await requireReproLima();
   if ("error" in scope) return { error: scope.error };
   if (!UUID.test(input.orderId ?? "")) return { error: "No encontramos el pedido." };

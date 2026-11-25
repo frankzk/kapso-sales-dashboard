@@ -1031,13 +1031,16 @@ describe("vercel.json: la foto de los pedidos", () => {
     JSON.parse(readFileSync(resolve(__dirname, "../vercel.json"), "utf8")) as { crons: { path: string; schedule: string }[] }
   ).crons;
 
-  it("cada 2 minutos, en los impares: casi sin pausa hasta terminar, sin que una pasada pise a la siguiente", () => {
-    expect(crons).toContainEqual({ path: "/api/cron/invoice-snapshots", schedule: "1-59/2 * * * *" });
-    // Nunca arranca en el minuto del barrido de boletas (6, 16, …, 56).
-    const odd = Array.from({ length: 30 }, (_, k) => 2 * k + 1);
-    for (const m of [6, 16, 26, 36, 46, 56]) expect(odd).not.toContain(m);
+  it("cada 5 minutos (owner, 25-11-2026; antes cada 2), sin que una pasada pise a la siguiente", () => {
+    expect(crons).toContainEqual({ path: "/api/cron/invoice-snapshots", schedule: "2-57/5 * * * *" });
+    // Nunca arranca en el minuto del barrido de boletas (6, 16, …, 56), ni en el
+    // :23 de las apps propias de Shopify, ni en el :48 de las fotos de producto.
+    const mine = Array.from({ length: 12 }, (_, k) => 5 * k + 2);
+    expect(mine).toEqual([2, 7, 12, 17, 22, 27, 32, 37, 42, 47, 52, 57]);
+    for (const m of [6, 16, 26, 36, 46, 56, 23, 48]) expect(mine).not.toContain(m);
     // La pasada termina antes de que empiece la próxima (y el turno de la base
-    // lo cuida si se atrasa): 95 s de trabajo + una llamada de 15 s < 120 s.
+    // lo cuida si se atrasa): 95 s de trabajo + una llamada de 15 s < 120 s de
+    // la ruta, y la próxima llega a los 300 s.
     expect(INVOICE_SNAPSHOT_BUDGET_MS + SHOPIFY_READ_TIMEOUT_MS).toBeLessThan(120_000);
   });
 });
@@ -1053,7 +1056,8 @@ describe("la regla está escrita (MOM §35.10, DEPLOY.md)", () => {
     expect(mom).toContain("foto_shopify");
     const s3510 = mom.slice(mom.indexOf("### 35.10"), mom.indexOf("## 36."));
     expect(s3510).toContain("**Una foto con el pedido nunca se pisa con una\nque no lo trae**");
-    expect(s3510).toContain("`1-59/2`");
+    expect(s3510).toContain("`2-57/5`");
+    expect(s3510).toContain("**Cada 5 minutos (owner, 25-11-2026).**");
     expect(s3510).toContain("`points.requested`, `points.actual`");
   });
 

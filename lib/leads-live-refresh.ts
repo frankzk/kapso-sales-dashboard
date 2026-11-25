@@ -20,8 +20,14 @@
 /** Los contadores que hacen urgente una recarga. */
 export const URGENT_COUNTS = ["handoff", "yape"] as const;
 
-/** Entre dos recargas «tranquilas». */
-export const QUIET_REFRESH_MS = 2 * 60_000;
+/**
+ * Entre dos recargas «tranquilas». Cinco minutos desde el 25-11-2026 (owner:
+ * «acepto que el tablero se recargue cada 5 minutos en vez de cada 2»); antes,
+ * dos. Medido del 14 al 25-11-2026: Leads se llevaba cerca del 47 % del tiempo
+ * de la base, y cada recarga baja la cola entera. Lo urgente («Atender ahora»,
+ * Yapes) sigue recargando al momento.
+ */
+export const QUIET_REFRESH_MS = 5 * 60_000;
 /** Red de seguridad: se recarga aunque la firma no cambie. */
 export const FORCED_REFRESH_MS = 5 * 60_000;
 

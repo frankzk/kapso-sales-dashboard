@@ -23,6 +23,30 @@ export const SELLOS_DE_LECTURA = ["last_report_at", "api_report_at", "api_update
 
 const SELLOS = new Set<string>(SELLOS_DE_LECTURA);
 
+/** Una fecha y hora con su zona: `2026-09-09T09:00:00.000Z`, `2026-09-09T09:00:00+00:00`. */
+const INSTANTE = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}(:?\d{2})?)$/;
+
+/**
+ * El mismo instante escrito de dos maneras.
+ *
+ * EL COSTE QUE ESTO EVITA (medido el 25-11-2026). El parche lleva `closed_at`
+ * de una guía entregada como lo escribe JavaScript (`…T09:00:00.000Z`) y la
+ * base lo devuelve como lo escribe Postgres (`…T09:00:00+00:00`). Comparados
+ * como texto eran distintos SIEMPRE: cada guía entregada de la ventana del
+ * barrido se reescribía entera y recalculaba su pedido en cada pasada. 247.723
+ * veces en 10 días (unas 23.800 al día, cerca del 83 % de los recálculos del
+ * Master) para 735 guías, de las que 3 habían cambiado en tres horas.
+ *
+ * Solo dos textos con forma de fecha, hora y zona: un día suelto, una etiqueta
+ * o un código no se interpretan.
+ */
+function mismoInstante(a: unknown, b: unknown): boolean {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  if (!INSTANTE.test(a) || !INSTANTE.test(b)) return false;
+  const ta = Date.parse(a);
+  return Number.isFinite(ta) && ta === Date.parse(b);
+}
+
 function igual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (a == null && b == null) return true;
@@ -30,7 +54,7 @@ function igual(a: unknown, b: unknown): boolean {
   // `numeric` llega como número o como texto según el cliente; «12.5» y 12.5
   // son el mismo monto.
   if (typeof a === "number" || typeof b === "number") return Number(a) === Number(b);
-  return false;
+  return mismoInstante(a, b);
 }
 
 /**

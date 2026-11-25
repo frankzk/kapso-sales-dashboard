@@ -2,6 +2,7 @@
 
 import {
   DASHBOARD_SECTIONS,
+  DASHBOARD_SUBSECTIONS,
   type ClientPerformanceMetric,
   type ClientPerformanceMetricName,
 } from "@/lib/performance-metrics";
@@ -37,7 +38,12 @@ export function sanitizeDashboardPath(value: string): string {
     // The split path above is already safe to normalize.
   }
   if (pathname === "/dashboard") return pathname;
-  const section = pathname.split("/").filter(Boolean)[1];
+  const [, section, sub] = pathname.split("/").filter(Boolean);
+  // Una pantalla que se mide aparte de su sección (Repro Lima dentro de
+  // «pedidos»): solo las de la lista, que son rutas fijas y sin ids.
+  if ((DASHBOARD_SUBSECTIONS as readonly string[]).includes(`${section ?? ""}/${sub ?? ""}`)) {
+    return `/dashboard/${section}/${sub}`;
+  }
   // La lista vive en lib/performance-metrics.ts, que es también la que valida
   // al recibir: si se mantuvieran por separado volverían a separarse.
   if ((DASHBOARD_SECTIONS as readonly string[]).includes(section ?? "")) {
@@ -46,8 +52,15 @@ export function sanitizeDashboardPath(value: string): string {
   return "/dashboard/other";
 }
 
+/** La sección de arriba, para decidir qué precargar: Repro Lima precarga lo mismo que «pedidos». */
+function prefetchSection(value: string): string {
+  const safe = sanitizeDashboardPath(value);
+  const [, section] = safe.split("/").filter(Boolean);
+  return section && (DASHBOARD_SECTIONS as readonly string[]).includes(section) ? `/dashboard/${section}` : safe;
+}
+
 export function panelPrefetchOrder(currentPath: string, isVendedoraOnly: boolean): string[] {
-  const current = sanitizeDashboardPath(currentPath);
+  const current = prefetchSection(currentPath);
   const available = isVendedoraOnly
     ? ["/dashboard/leads", "/dashboard/pedidos", "/dashboard/envios"]
     : [...PRIMARY_PANEL_PATHS];

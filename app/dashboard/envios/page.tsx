@@ -14,6 +14,7 @@ import { ShipmentsBoard } from "@/components/shipments";
 import { SwaypUnknownGuides } from "@/components/swayp-unknown-guides";
 import { getSwaypUnknownGuides } from "@/lib/swayp-unknown-guides-access";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
+import { pageLoadTimer } from "@/lib/page-load-log";
 
 export const dynamic = "force-dynamic";
 
@@ -34,6 +35,8 @@ async function EnviosContent({
 }: {
   searchParams: Promise<{ view?: string; open?: string }>;
 }) {
+  // Una línea por carga en los logs (lib/page-load-log.ts): solo tiempos y conteos.
+  const load = pageLoadTimer("envios");
   const [sp, stores] = await Promise.all([searchParams, getAccessibleStores()]);
   if (!stores.length) {
     return <EmptyState title="No tienes tiendas asignadas" />;
@@ -46,13 +49,14 @@ async function EnviosContent({
   const storeIds = stores.map((s) => s.id);
   const today = limaTodayKey();
   const [counts, shipments, reprogram, teamScore, swaypUnknown] = await Promise.all([
-    getShipmentCounts(storeIds),
-    getStoreShipments(storeIds, view),
-    getReprogramStats(storeIds),
-    getTeamScore(storeIds, today, today),
+    load.timed("contadores", getShipmentCounts(storeIds)),
+    load.timed("guias", getStoreShipments(storeIds, view)),
+    load.timed("reprogramacion", getReprogramStats(storeIds)),
+    load.timed("equipo", getTeamScore(storeIds, today, today)),
     // Sin la 0282 (o si falla la lectura) no hay tarjeta: nunca tumba Envíos.
     getSwaypUnknownGuides(storeIds).catch(() => null),
   ]);
+  load.done({ filas: shipments.length });
 
   // El automático Aliclik → Swayp se abre desde las acciones de la cabecera
   // del tablero: vivía en un enlace suelto encima de la página.

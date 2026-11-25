@@ -479,7 +479,7 @@ const WIN_LABEL = { fresca: "A tiempo", por_vencer: "Por vencer", cerrada: "Venc
 // «Bloques por asesora»). Lo propio se ve al momento; lo de las demás, en
 // hasta un minuto. Al volver a la pestaña se pregunta en el acto.
 const LEADS_LIVE_POLL_MS = 60_000;
-// Cuándo recargar de verdad —urgente, tranquila cada dos minutos, o forzada
+// Cuándo recargar de verdad —urgente, tranquila cada cinco minutos (dos hasta el 25-11-2026), o forzada
 // cada cinco— lo decide lib/leads-live-refresh.ts, que es puro y está probado.
 // El panel de gráficos se recarga con la misma calma: ve una semana entera, y
 // bajarlo en cada refresco era la segunda partida del egress.

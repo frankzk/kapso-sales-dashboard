@@ -16,7 +16,7 @@
 //
 // Lo de adentro del reparto de Grupo GF —«Sale a reparto» y los trabados de sus
 // cajas y motorizados— está en Grupo GF Courier → Despacho del día.
-import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, useTransition, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/components/ui";
 import { AttentionPill, Badge, Banner, FIELD, FilterPill, OpsButton, StatusCard, ChoiceChip } from "@/components/ops-ui";
@@ -37,7 +37,7 @@ import { NoEntregoButton } from "@/components/repro-lima-no-entrego";
 import { QuickGuideButtons } from "@/components/repro-lima-quick-guide";
 import { OpsToast, type OpsToastData } from "@/components/ops-toast";
 import { AgendarButton, ChannelPicker, CourierPicker, DayPicker, agendarOutcome, newAgendarOperationId, type AgendarChannel } from "@/components/repro-lima-agendar";
-import { clearReproLimaQueue, setReproLimaQueue, type ReproLimaQueue } from "@/lib/repro-lima-queue";
+import { clearReproLimaQueue, reproLimaHeldClaims, setReproLimaQueue, subscribeReproLimaClaims, withLocalClaims, type ReproLimaQueue } from "@/lib/repro-lima-queue";
 import { LIMA_STUCK_HOME_LABEL, limaStuckItems, limaStuckRule, stuckFilter, stuckMovedTo, type LimaStuckHome } from "@/lib/lima-stuck";
 import { approveAliclikRetry } from "@/app/dashboard/pedidos/repro-lima/retry-actions";
 import { agendarReproLima, type AgendarResult } from "@/app/dashboard/pedidos/repro-lima/agenda-actions";
@@ -71,6 +71,8 @@ import { LIMA_SORT_OPTIONS, limaSortLabel, limaSortMissingNote, readLimaSort, so
 import { createdPresets, emptyRowFilters, groupApprovalFailures, pendingKey, pendingMatches, readRowFilters, retryApprovalTargets, rowFilterOptions, rowFiltersParam, rowFiltersActive, rowFiltersMatch, togglePendingKeys, writeRowFilters, type LimaPendingOrder, type LimaRowFilters } from "@/lib/repro-lima-pending";
 
 const FOCUS_REFRESH_MS = 20_000;
+/** Sin ficha tomada (y en el servidor): el mismo objeto siempre, para `useSyncExternalStore`. */
+const NO_CLAIMS: ReadonlySet<string> = new Set();
 /** Los trabados que se ven en Repro Lima; los de Grupo GF, en Despacho del día. */
 const TEAM_HOMES: readonly LimaStuckHome[] = ["gestion", "courier"];
 
@@ -189,7 +191,11 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     return { channels: without("channels"), districts: without("districts"), couriers: without("couriers"), suggested: without("suggested") };
   }, [visibleAll, rowFilters, activeRowFilters, stuck, key, classes, today, detail]);
   const counts = useMemo(() => limaBoardCounts(scoped, classes), [scoped, classes]);
-  const caseById = useMemo(() => new Map(data.rows.map((row) => [row.orderId, row])), [data.rows]);
+  // «Lo atiendes tú» lo dice la ficha de esta pestaña (tomar y soltar ya no
+  // vuelven a pedir la pantalla); «otro lo atiende», la última lectura.
+  const heldHere = useSyncExternalStore(subscribeReproLimaClaims, reproLimaHeldClaims, () => NO_CLAIMS);
+  const reproRows = useMemo(() => withLocalClaims(data.rows, heldHere), [data.rows, heldHere]);
+  const caseById = useMemo(() => new Map(reproRows.map((row) => [row.orderId, row])), [reproRows]);
   // `loadReproLima` ya ordena los casos (`sortRepro`): No entregados y Llamar después siguen ese orden.
   const caseOrder = useMemo(() => new Map(data.rows.map((row, i) => [row.orderId, i])), [data.rows]);
   const stuckItems = useMemo(
@@ -306,6 +312,12 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     startRefresh(() => router.refresh());
   }
 
+  // Una lectura que llega sola (guardar en la ficha revalida la página) cuenta
+  // como recién leída: volver a la pestaña justo después no la pide otra vez.
+  useEffect(() => {
+    lastRefresh.current = Date.now();
+  }, [data, pending]);
+
   // Al volver a la pestaña (después de una llamada, por ejemplo), se relee.
   useEffect(() => {
     lastRefresh.current = Date.now();
@@ -366,12 +378,14 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
             gfCourierApi={gfApi.has(row.storeId)}
             courierAuto={courierAuto.has(row.storeId)}
             currentCourier={isDispatchCourier(row.scheduledCourier) ? row.scheduledCourier : null}
-            onDone={(f) => { setFeedback({ kind: f.kind, text: f.text, mesa: f.mesa ? [f.mesa] : undefined }); refresh(); }}
+            // Sin `refresh()`: «Programar» ya trae la pantalla en su respuesta (`agendarReproLima` revalida lo guardado).
+            onDone={(f) => setFeedback({ kind: f.kind, text: f.text, mesa: f.mesa ? [f.mesa] : undefined })}
           />
         )}
         {/* Ruta vencida del reparto propio: la clienta confirma que no lo recibió → se registra por el motorizado (owner, 15-11-2026). */}
         {canReportForRider && classes.get(row.orderId)?.noReport && limaOwnRoute(row) && (
-          <NoEntregoButton row={row} size={size} onDone={(f) => { setFeedback(f); refresh(); }} />
+          // Sin `refresh()`: `reportStop` revalida Repro Lima y la pantalla vuelve en su respuesta.
+          <NoEntregoButton row={row} size={size} onDone={(f) => setFeedback(f)} />
         )}
         <OpsButton size={size} className="pointer-coarse:h-11" onClick={() => openDrawer(row.orderId, "reprolima")}>Atender</OpsButton>
         {/* Crear la guía directo, por las mismas acciones de la Mesa de ruta (owner, 16-11-2026: «como un fast forward»). */}
@@ -386,7 +400,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
               if (f.toast) {
                 setToast({ id: Date.now(), ...f.toast, action: { label: "Abrir la Mesa de ruta", onClick: () => openDrawer(row.orderId, "operar") } });
               }
-              refresh();
+              // Sin `refresh()`: crear la guía (`createAliclikGuide`, `createGfCourierGuide`) ya revalida.
             }}
             onOpenFicha={() => openDrawer(row.orderId, "operar")}
           />
@@ -774,7 +788,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
         <LimaPendingList
           key={`${key}:${stuck ?? ""}:${store}:${query}:${hiddenParam}:${rowFiltersKey}:${sort.key}:${sort.dir}`}
           rows={inQueue}
-          reproRows={data.rows}
+          reproRows={reproRows}
           today={today}
           now={now}
           classes={classes}

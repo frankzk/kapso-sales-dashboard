@@ -55,6 +55,8 @@ describe("confirmed call reconciliation", () => {
     const input = { prevSignature: "before", nextSignature: "after", prevCounts: adjusted, nextCounts: adjusted, lastRefreshAt: now, now: now + 30000 };
     expect(decideQueueRefresh(input)).toBe("skip");
     expect(decideQueueRefresh({ ...input, nextCounts: { ...adjusted, handoff: adjusted.handoff + 1 } })).toBe("urgent");
-    expect(decideQueueRefresh({ ...input, now: now + 120000 })).toBe("quiet");
+    // La calma es de cinco minutos desde el 25-11-2026 (antes, dos).
+    expect(decideQueueRefresh({ ...input, now: now + 120000 })).toBe("skip");
+    expect(decideQueueRefresh({ ...input, now: now + 300000 })).toBe("forced");
   });
 });
