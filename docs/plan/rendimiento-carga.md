@@ -322,6 +322,65 @@ reservado y uno de cada minuto los pisaría. El efecto para el equipo es el
 mismo: con Kapta abierto, un aviso vencido pasa a la siguiente persona en un
 minuto y pico.
 
+### Repro Lima: cuánto tarda cada lectura (25-11-2026)
+
+Medido con la línea `[repro-lima] carga`, una hora en horario de trabajo, ya
+con una lectura por guardado: 2,3 a 3,6 s por lectura. La causa era la
+cantidad de consultas: unas 260 por lectura, porque cada tabla se leía de a
+100 pedidos y varias lecturas esperaban a otras sin depender de ellas.
+
+| Qué | Antes | Ahora |
+|---|---|---|
+| Pedidos por tanda en cada tabla | 100 (12 tandas con 1.184 pedidos) | 400 (3 tandas) |
+| Consultas por lectura de la pantalla | Unas 260 | Unas 100 (estimado) |
+| Pedidos de la etapa (3 páginas) | Una tras otra | La primera, y las otras dos juntas |
+| Cajas vigentes de Grupo GF, proveedor y salidas | Las cajas primero, lo demás detrás | En una sola espera |
+| Historial de rutas reportadas | En fila al final | Junto a las demás lecturas |
+
+Filas por tanda, medidas en producción ese día: la tabla más cargada son las
+salidas, con 1,25 por pedido (unas 500 filas por tanda de 400), lejos del tope
+de 1.000 filas por respuesta. Por si un día no lo está, cada tanda pide el
+conteo exacto y se parte sola cuando el servidor la corta.
+
+**Cuánto mejora.** Estimado, no medido: el tiempo debería bajar en proporción
+a las consultas. Se confirma con la línea `[repro-lima] carga` después de
+desplegar.
+
+Queda para después: que las dos lecturas de la pantalla (casos y pendientes)
+compartan lo que hoy leen por separado (las salidas se leen cuatro veces), y
+que los lotes vayan en una sola llamada.
+
+### Leads: cuánto tarda la lista (25-11-2026)
+
+Medido con la línea `[leads] carga`, una hora en horario de trabajo: 2,9 a
+9,8 s por carga, y `lista` era cerca del 90 %. La cola de «Por llamar» son
+12.513 leads con 47 columnas, leídos en 13 páginas de mil, cada una esperando
+a la anterior. La base contestaba cada página en 42 ms de media (con el
+armado de la respuesta incluido): el tiempo se iba en la fila de viajes, no
+en la base.
+
+| Qué | Antes | Ahora |
+|---|---|---|
+| Cómo se lee la cola | 13 páginas, una detrás de otra | 16 tramos de ids, de a 8 a la vez |
+| Tandas de espera | 13 | 2 |
+| Costo en la base, medido igual en las dos formas | 21 ms y 7.700 bloques por página de mil | 10 ms y unos 950 bloques por tramo de unos 800 |
+| Cuándo empieza a leerse | Después de la respuesta del reparto | A la vez que el reparto |
+| Medición | `lista` (cola y productos sumados) | `lista` y `productos` por separado |
+
+**Cuánto mejora.** Estimado, no medido: de 13 esperas a 2. Se confirma con la
+línea `[leads] carga` después de desplegar.
+
+**Lo que este cambio no arregla.** La pantalla sigue trayendo los 12.513
+leads enteros al navegador en cada carga y en cada recarga. Eso pesa en la
+red y en el navegador de cada asesora y no lo mide `lista`. Es el cambio 2 de
+la fase 2 («Por llamar» filtra en la base en vez de traer todo).
+
+**Un tope que se acerca.** La cola se corta en 20.000 leads
+(`LEADS_PAGE_CAP`) y la pantalla no avisa cuando lo alcanza: los que pasan el
+tope no salen en «Por llamar». Eran unos 7.000 el 02-10-2026 y son 12.513 el
+25-11-2026. Si sigue creciendo así, se alcanza en unos dos o tres meses
+(estimado). El cambio 2 de la fase 2 lo resuelve de raíz.
+
 ### Siguiente paso propuesto
 
 1. Medir un día con lo que ya está en producción (desde el 25-11-2026).

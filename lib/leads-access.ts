@@ -183,7 +183,7 @@ export async function getStoreLeads(
 ): Promise<LeadRow[]> {
   if (!storeIds.length) return [];
   const sb = await createServerSupabase();
-  const routing = await getLeadRoutingScope(storeIds);
+  const routingRead = getLeadRoutingScope(storeIds);
   const buildQuery = (select: string = LEAD_BOARD_SELECT, count?: "exact") => {
     let q = sb
       .from("leads")
@@ -244,6 +244,17 @@ export async function getStoreLeads(
     return q;
   };
 
+  // SIN TOPE, LA COLA EMPIEZA A LEERSE YA (25-11-2026). Se lee entera con el
+  // reparto que sea: el reparto solo decide después qué filas se devuelven. Antes
+  // la lectura esperaba primero al reparto y recién ahí empezaba. Si el reparto
+  // falla, esta función falla igual y lo leído se descarta: nunca se devuelve la
+  // cola sin filtrar.
+  const drainAll = () => (view === "por_llamar" ? drainLeadsById(buildQuery) : drainLeads(buildQuery));
+  const early = limit === null ? drainAll() : null;
+  // Si el reparto falla primero, que la lectura en curso no quede como un rechazo sin dueño.
+  early?.catch(() => undefined);
+  const routing = await routingRead;
+
   if (limit !== null && (!routing.enabled || view === "ganados" || view === "perdidos")) {
     // «Atender ahora»: los pagos por validar se leen a la par de la vista.
     const pendingIndex = view === "handoff" ? loadPendingVouchers(sb, storeIds) : null;
@@ -259,7 +270,7 @@ export async function getStoreLeads(
   }
   // «Por llamar» ordena solo por `id`: se drena por clave (`id > último`).
   // Las demás vistas ordenan por otra columna y siguen con rangos.
-  const all = view === "por_llamar" ? await drainLeadsById(buildQuery) : await drainLeads(buildQuery);
+  const all = await (early ?? drainAll());
   let visible = filterRoutedLeads(all, routing);
   if (view === "handoff") visible = filterRoutedLeads(await withPendingVoucherLeads(sb, storeIds, visible, LEAD_BOARD_SELECT, await loadPendingVouchers(sb, storeIds)), routing);
   const sorted = view === "por_llamar" ? sortPorLlamar(visible) : visible;
@@ -319,36 +330,101 @@ export function sortPorLlamar<T extends Pick<LeadRow, "id" | "needs_attention" |
 }
 
 /**
- * La cola entera de «Por llamar», por clave (0312, revisión de rendimiento).
+ * Dónde empieza cada tramo de ids de «Por llamar»: los que comienzan con 1, con
+ * 2… hasta f. Son 15 cortes y 16 tramos; el primero no tiene piso y el último
+ * no tiene techo, así que ningún id queda fuera sea cual sea su forma.
+ */
+const LEAD_ID_SLICE_STARTS: readonly string[] = [..."123456789abcdef"].map((digit) => `${digit}0000000-0000-0000-0000-000000000000`);
+
+/** Tramos de «Por llamar» que se leen a la vez. */
+export const LEAD_DRAIN_CONCURRENCY = 8;
+
+/**
+ * La cola entera de «Por llamar», por clave y en tramos a la vez.
  *
- * Con rangos (`order by id offset N`) cada página vuelve a recorrer
- * `leads_pkey` desde el principio y descarta lo de antes (medido el 06-11-2026:
- * la página en 5.000 lee 43.000 bloques y descarta 36.786 filas), y la primera
- * con `count: "exact"` además cuenta todo. Por clave cada página empieza donde
- * acabó la anterior (`id > último`) y nada se cuenta: un solo recorrido en
- * total. Las páginas van en serie —cada una necesita el último id de la
- * anterior—, pero cada una lee solo lo suyo. Mismas filas y mismo orden: la
- * vista ordena solo por `id`, y además no salta ni repite filas si la cola
- * cambia entre página y página.
+ * POR CLAVE (0312, revisión de rendimiento). Con rangos (`order by id offset
+ * N`) cada página vuelve a recorrer `leads_pkey` desde el principio y descarta
+ * lo de antes (medido el 06-11-2026: la página en 5.000 lee 43.000 bloques y
+ * descarta 36.786 filas), y la primera con `count: "exact"` además cuenta todo.
+ * Por clave cada página empieza donde acabó la anterior (`id > último`) y nada
+ * se cuenta.
+ *
+ * EN TRAMOS A LA VEZ (owner, 25-11-2026: «es clave el tiempo de carga del
+ * sistema»). Las páginas iban en serie —cada una necesita el último id de la
+ * anterior—, y con 12.513 leads eran 13 viajes a la base uno detrás de otro:
+ * la lista tardaba de 2,9 a 9,8 s, el 90 % de la carga de Leads, mientras la
+ * base contestaba cada página en 42 ms. Lo que se esperaba era la fila. Los
+ * ids son al azar, así que se reparten parejo por su primer dígito (medido ese
+ * día: de 727 a 823 leads de la cola por dígito). Cada tramo se drena por clave
+ * dentro de sus cortes, de a `LEAD_DRAIN_CONCURRENCY`: hoy un viaje por tramo,
+ * dos tandas en total. Si la cola crece, un tramo sigue con su segunda página.
+ * A la base le cuesta menos que antes: con los cortes usa dos índices a la vez
+ * (10 ms y unos 950 bloques por tramo; la página de mil eran 21 ms y 7.700).
+ *
+ * LO MISMO QUE ANTES, EN EL MISMO ORDEN. Los tramos se unen en orden de id:
+ *   - la cola cortada en `LEADS_PAGE_CAP` sigue siendo los ids más bajos;
+ *   - un tramo que falla corta la lista ahí (lo anterior se conserva), como
+ *     cuando fallaba una página;
+ *   - si falla la primera lectura se reintenta todo con las columnas antiguas.
  */
 async function drainLeadsById(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   buildQuery: (select?: string, count?: "exact") => any,
 ): Promise<LeadRow[]> {
+  const drained = await drainLeadSlices(buildQuery, LEAD_BOARD_SELECT);
+  if (!drained.firstReadFailed) return drained.rows;
+  return (await drainLeadSlices(buildQuery, LEAD_BOARD_SELECT_LEGACY)).rows;
+}
+
+async function drainLeadSlices(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  buildQuery: (select?: string, count?: "exact") => any,
+  select: string,
+): Promise<{ rows: LeadRow[]; firstReadFailed: boolean }> {
+  const bounds: Array<string | null> = [null, ...LEAD_ID_SLICE_STARTS, null];
+  const slices: Array<LeadRow[] | null> = new Array(bounds.length - 1).fill(null);
+  let fetched = 0;
+  let nextSlice = 0;
+  let failedSlice: number | null = null;
+  let firstReadFailed = false;
+  const drainSlice = async (index: number) => {
+    const rows: LeadRow[] = [];
+    slices[index] = rows;
+    const from = bounds[index];
+    const before = bounds[index + 1];
+    let after: string | null = null;
+    // Un tramo empezado se lee entero: así lo unido es siempre la cola desde su primer id.
+    while (rows.length < LEADS_PAGE_CAP) {
+      let query = buildQuery(select);
+      if (after !== null) query = query.gt("id", after);
+      else if (from) query = query.gte("id", from);
+      if (before) query = query.lt("id", before);
+      const res = await query.limit(LEADS_PAGE_SIZE);
+      if (res.error) {
+        if (index === 0 && after === null) firstReadFailed = true;
+        if (failedSlice === null || index < failedSlice) failedSlice = index;
+        return;
+      }
+      const batch = (res.data as unknown as LeadRow[] | null) ?? [];
+      rows.push(...batch);
+      fetched += batch.length;
+      if (batch.length < LEADS_PAGE_SIZE) return;
+      after = batch[batch.length - 1]!.id;
+    }
+  };
+  const worker = async () => {
+    // No se empieza un tramo más con el tope ya leído, ni después de uno que falló.
+    while (nextSlice < slices.length && fetched < LEADS_PAGE_CAP && failedSlice === null) await drainSlice(nextSlice++);
+  };
+  await Promise.all(Array.from({ length: LEAD_DRAIN_CONCURRENCY }, worker));
   const rows: LeadRow[] = [];
-  let select = LEAD_BOARD_SELECT;
-  let res = await buildQuery(select).limit(LEADS_PAGE_SIZE);
-  if (res.error && select !== LEAD_BOARD_SELECT_LEGACY) {
-    select = LEAD_BOARD_SELECT_LEGACY;
-    res = await buildQuery(select).limit(LEADS_PAGE_SIZE);
+  for (let index = 0; index < slices.length; index += 1) {
+    const slice = slices[index];
+    if (!slice) break;
+    rows.push(...slice);
+    if (failedSlice !== null && index >= failedSlice) break;
   }
-  while (!res.error) {
-    const batch = (res.data as unknown as LeadRow[] | null) ?? [];
-    rows.push(...batch);
-    if (batch.length < LEADS_PAGE_SIZE || rows.length >= LEADS_PAGE_CAP) break;
-    res = await buildQuery(select).gt("id", batch[batch.length - 1]!.id).limit(LEADS_PAGE_SIZE);
-  }
-  return rows;
+  return { rows: rows.slice(0, LEADS_PAGE_CAP), firstReadFailed };
 }
 
 async function drainLeads(

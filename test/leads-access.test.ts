@@ -123,32 +123,59 @@ describe("getStoreLeads pagination", () => {
   });
 });
 
-describe("getStoreLeads «Por llamar» por clave (id > último)", () => {
+// Owner, 25-11-2026: «es clave el tiempo de carga del sistema». Medido ese día: la lista de «Por llamar» tardaba
+// de 2,9 a 9,8 s (el 90 % de la carga de Leads) porque sus 13 páginas iban una detrás de otra. Ahora la cola se
+// lee en 16 tramos de ids, de a 8 a la vez. Las filas y el orden son los mismos.
+describe("getStoreLeads «Por llamar»: por clave y en tramos de ids a la vez", () => {
   beforeEach(() => {
     createServerSupabaseMock.mockReset();
   });
 
-  /** Sirve `source` (ordenado por id) con `gt("id")` + `limit`, sin rangos ni total. */
-  function mockKeysetLeads(source: { id: string }[]) {
-    const pages: Array<{ after: string | null; limit: number; count: boolean }> = [];
+  type Request = { from: string | null; before: string | null; after: string | null; limit: number; count: boolean; select: string };
+  const cut = (digit: string) => `${digit}0000000-0000-0000-0000-000000000000`;
+  /** Un id con forma de uuid que empieza con `digit`; `n` lo ordena dentro de su tramo. */
+  const uuid = (digit: string, n: number) => `${digit}${String(n).padStart(7, "0")}-0000-4000-8000-000000000000`;
+
+  /**
+   * Sirve `source` como la base: `gte`/`lt` son los cortes del tramo, `gt` la clave, `limit` el tamaño.
+   * Sin rangos ni total. `fail` decide qué lectura devuelve error.
+   */
+  function mockKeysetLeads(source: { id: string }[], fail: (request: Request) => boolean = () => false) {
+    const sorted = [...source].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    const requests: Request[] = [];
+    let inFlight = 0;
+    let peak = 0;
     createServerSupabaseMock.mockResolvedValue({
       from: () => {
         const query: Record<string, unknown> = {};
-        let after: string | null = null;
-        let wantsCount = false;
-        query.select = vi.fn((_select: string, opts?: { count?: string }) => {
-          wantsCount = opts?.count === "exact";
+        const request: Request = { from: null, before: null, after: null, limit: 0, count: false, select: "" };
+        query.select = vi.fn((select: string, opts?: { count?: string }) => {
+          request.select = select;
+          request.count = opts?.count === "exact";
           return query;
         });
         for (const method of ["eq", "in", "neq", "order"]) query[method] = vi.fn(() => query);
-        query.gt = vi.fn((column: string, value: string) => {
+        const bound = (key: "from" | "before" | "after") => vi.fn((column: string, value: string) => {
           expect(column).toBe("id");
-          after = value;
+          request[key] = value;
           return query;
         });
+        query.gte = bound("from");
+        query.lt = bound("before");
+        query.gt = bound("after");
         query.limit = vi.fn(async (n: number) => {
-          pages.push({ after, limit: n, count: wantsCount });
-          return { data: source.filter((l) => after === null || l.id > after).slice(0, n), error: null };
+          request.limit = n;
+          requests.push(request);
+          inFlight += 1;
+          peak = Math.max(peak, inFlight);
+          await new Promise((resolve) => setTimeout(resolve, 1));
+          inFlight -= 1;
+          if (fail(request)) return { data: null, error: { message: "caído" } };
+          const rows = sorted.filter((l) =>
+            (request.from === null || l.id >= request.from)
+            && (request.before === null || l.id < request.before)
+            && (request.after === null || l.id > request.after));
+          return { data: rows.slice(0, n), error: null };
         });
         query.range = vi.fn(() => {
           throw new Error("«Por llamar» no pagina por rangos");
@@ -156,29 +183,125 @@ describe("getStoreLeads «Por llamar» por clave (id > último)", () => {
         return query;
       },
     });
-    return pages;
+    return { requests, sorted, peak: () => peak };
   }
+  const DIGITS = [..."0123456789abcdef"];
 
-  it("cada página empieza en el último id de la anterior y nada se cuenta", async () => {
-    const source = Array.from({ length: 2545 }, (_, index) => ({ id: `lead-${String(index).padStart(4, "0")}` }));
-    const pages = mockKeysetLeads(source);
+  it("16 tramos, uno por primer dígito del id: el primero sin piso y el último sin techo", async () => {
+    const source = DIGITS.flatMap((digit) => Array.from({ length: 40 }, (_, n) => ({ id: uuid(digit, n) })));
+    const { requests, sorted } = mockKeysetLeads(source);
 
     const rows = await getStoreLeads(["kenku-peru"], "por_llamar", null);
 
-    expect(rows.map((l) => l.id)).toEqual(source.map((l) => l.id));
-    expect(pages).toEqual([
-      { after: null, limit: 1000, count: false },
-      { after: "lead-0999", limit: 1000, count: false },
-      { after: "lead-1999", limit: 1000, count: false },
-    ]);
+    expect(rows.map((l) => l.id)).toEqual(sorted.map((l) => l.id));
+    // Una lectura por tramo y nada se cuenta.
+    expect(requests).toHaveLength(16);
+    expect(requests.every((r) => r.limit === 1000 && !r.count && r.after === null)).toBe(true);
+    const bounds = requests.map((r) => [r.from, r.before]).sort((a, b) => String(a[0] ?? "").localeCompare(String(b[0] ?? "")));
+    expect(bounds[0]).toEqual([null, cut("1")]);
+    expect(bounds[15]).toEqual([cut("f"), null]);
+    // Cada tramo empieza donde termina el anterior: ni huecos ni filas repetidas.
+    for (let i = 1; i < 16; i += 1) expect(bounds[i]![0]).toBe(bounds[i - 1]![1]);
   });
 
-  it("una sola página cuando la primera no se llena", async () => {
-    const source = Array.from({ length: 42 }, (_, index) => ({ id: `lead-${String(index).padStart(4, "0")}` }));
-    const pages = mockKeysetLeads(source);
+  it("los tramos van de a ocho a la vez", async () => {
+    const source = DIGITS.flatMap((digit) => Array.from({ length: 5 }, (_, n) => ({ id: uuid(digit, n) })));
+    const { peak } = mockKeysetLeads(source);
+    await getStoreLeads(["kenku-peru"], "por_llamar", null);
+    expect(peak()).toBe(8);
+  });
 
-    expect(await getStoreLeads(["kenku-peru"], "por_llamar", null)).toHaveLength(42);
-    expect(pages).toHaveLength(1);
+  it("un tramo con más de mil sigue por clave dentro de sus cortes", async () => {
+    // 2.545 leads en el tramo del «7»; los demás, vacíos.
+    const source = Array.from({ length: 2545 }, (_, n) => ({ id: uuid("7", n) }));
+    const { requests, sorted } = mockKeysetLeads(source);
+
+    const rows = await getStoreLeads(["kenku-peru"], "por_llamar", null);
+
+    expect(rows.map((l) => l.id)).toEqual(sorted.map((l) => l.id));
+    expect(requests.filter((r) => r.from === cut("7") || r.after !== null)).toEqual([
+      expect.objectContaining({ from: cut("7"), before: cut("8"), after: null, limit: 1000, count: false }),
+      expect.objectContaining({ from: null, before: cut("8"), after: uuid("7", 999), limit: 1000, count: false }),
+      expect.objectContaining({ from: null, before: cut("8"), after: uuid("7", 1999), limit: 1000, count: false }),
+    ]);
+    // 15 tramos de una lectura y uno de tres.
+    expect(requests).toHaveLength(18);
+  });
+
+  it("un id que no parece uuid no se queda fuera: cae en el primer tramo o en el último", async () => {
+    const source = [{ id: "lead-0001" }, { id: "zzz" }, { id: "00" }, { id: "-" }, { id: uuid("3", 1) }];
+    const { sorted } = mockKeysetLeads(source);
+    const rows = await getStoreLeads(["kenku-peru"], "por_llamar", null);
+    expect(rows.map((l) => l.id)).toEqual(sorted.map((l) => l.id));
+  });
+
+  it("la cola vacía: una lectura por tramo y lista vacía", async () => {
+    const { requests } = mockKeysetLeads([]);
+    expect(await getStoreLeads(["kenku-peru"], "por_llamar", null)).toEqual([]);
+    expect(requests).toHaveLength(16);
+  });
+
+  it("un tramo que falla corta la lista ahí: lo anterior se conserva y lo de después no se pega", async () => {
+    const source = DIGITS.flatMap((digit) => Array.from({ length: 3 }, (_, n) => ({ id: uuid(digit, n) })));
+    // Falla el tramo del «5».
+    const { sorted } = mockKeysetLeads(source, (r) => r.from === cut("5"));
+    const rows = await getStoreLeads(["kenku-peru"], "por_llamar", null);
+    expect(rows.map((l) => l.id)).toEqual(sorted.filter((l) => l.id < cut("5")).map((l) => l.id));
+  });
+
+  it("un tramo que falla en su segunda página conserva la primera y corta ahí", async () => {
+    const source = [
+      ...Array.from({ length: 4 }, (_, n) => ({ id: uuid("1", n) })),
+      ...Array.from({ length: 1200 }, (_, n) => ({ id: uuid("2", n) })),
+      ...Array.from({ length: 4 }, (_, n) => ({ id: uuid("9", n) })),
+    ];
+    const { sorted } = mockKeysetLeads(source, (r) => r.after !== null);
+    const rows = await getStoreLeads(["kenku-peru"], "por_llamar", null);
+    expect(rows.map((l) => l.id)).toEqual(sorted.filter((l) => l.id <= uuid("2", 999)).map((l) => l.id));
+  });
+
+  it("si falla la primera lectura se reintenta todo con las columnas antiguas", async () => {
+    const source = DIGITS.flatMap((digit) => Array.from({ length: 2 }, (_, n) => ({ id: uuid(digit, n) })));
+    // La base sin la migración: cualquier lectura que pida `cart_count_48h` falla.
+    const { requests, sorted } = mockKeysetLeads(source, (r) => r.select.split(",").includes("cart_count_48h"));
+    const rows = await getStoreLeads(["kenku-peru"], "por_llamar", null);
+    expect(rows.map((l) => l.id)).toEqual(sorted.map((l) => l.id));
+    const legacy = requests.filter((r) => !r.select.split(",").includes("cart_count_48h"));
+    expect(legacy).toHaveLength(16);
+    // Si también fallan las antiguas, la cola sale vacía, como antes.
+    mockKeysetLeads(source, () => true);
+    expect(await getStoreLeads(["kenku-peru"], "por_llamar", null)).toEqual([]);
+  });
+
+  it("con más del tope, la cola son los 20.000 ids más bajos, como antes", async () => {
+    // 1.600 por tramo: 25.600 leads.
+    const source = DIGITS.flatMap((digit) => Array.from({ length: 1600 }, (_, n) => ({ id: uuid(digit, n) })));
+    const { sorted } = mockKeysetLeads(source);
+    const rows = await getStoreLeads(["kenku-peru"], "por_llamar", null);
+    expect(rows).toHaveLength(20_000);
+    expect(rows.map((l) => l.id)).toEqual(sorted.slice(0, 20_000).map((l) => l.id));
+  });
+});
+
+describe("«Por llamar» en tramos: lo que no puede cambiar sin querer", () => {
+  const src = readFileSync(join(process.cwd(), "lib/leads-access.ts"), "utf8");
+
+  it("ocho tramos a la vez, y la cola sin tope empieza a leerse antes de saber el reparto", () => {
+    expect(src).toContain("export const LEAD_DRAIN_CONCURRENCY = 8;");
+    expect(src).toContain("const early = limit === null ? drainAll() : null;");
+    // El reparto se espera siempre antes de devolver algo: si falla, falla la función.
+    expect(src.indexOf("const routing = await routingRead;")).toBeGreaterThan(src.indexOf("const early = limit === null ? drainAll() : null;"));
+    expect(src).toContain("const all = await (early ?? drainAll());");
+    expect(src).toContain("let visible = filterRoutedLeads(all, routing);");
+  });
+
+  it("el MOM dice cómo se lee la cola y que nada cambia para la asesora", () => {
+    const mom = readFileSync(join(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8").replace(/\s+/g, " ");
+    for (const text of [
+      "**La cola de «Por llamar» se lee en tramos a la vez (25-11-2026, owner: «es clave el tiempo de carga del sistema»).**",
+      "Ahora la cola se lee en 16 tramos, de a 8 a la vez",
+      "No cambia qué leads salen, en qué orden, ni el reparto",
+    ]) expect(mom).toContain(text);
   });
 });
 

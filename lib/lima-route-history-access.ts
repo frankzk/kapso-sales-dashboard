@@ -1,5 +1,5 @@
 import type { createAdminSupabase } from "@/lib/db";
-import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
+import { allCourierRows, COURIER_ROWS_WIDE_BATCH, courierRowsByIds } from "@/lib/courier-flow";
 import { compareDispatchCodes } from "@/lib/dispatched-with";
 
 type Admin = ReturnType<typeof createAdminSupabase>;
@@ -13,22 +13,22 @@ export function limaHistoryFromReportedRoutes(stops: readonly LimaReportedRoute[
   return [...new Set(stops.map((s) => `gf:${s.rider!.trim()}`))].sort(compareDispatchCodes);
 }
 
-/** El llamador limita a historial vacío y salidas exclusivamente propias. Lecturas paginadas por lote. */
+/** El llamador limita a historial vacío y salidas exclusivamente propias. Lecturas paginadas por lote (por eso el lote puede ser ancho). */
 export async function loadLimaReportedHistory(admin: Admin, orderIds: string[]): Promise<Map<string, string[]>> {
   const result = new Map<string, string[]>();
   if (!orderIds.length) return result;
   type Stop = { id: string; order_id: string; route_id: string | null; status: string | null };
   const { data: stops } = await courierRowsByIds<Stop>(orderIds, (ids) => allCourierRows<Stop>((from, to) => admin.from("delivery_stops")
     .select("id,order_id,route_id,status").in("order_id", ids).in("status", ["entregado", "no_entregado"])
-    .order("id").range(from, to) as unknown as Read<Stop>).then((data) => ({ data, error: null })));
+    .order("id").range(from, to) as unknown as Read<Stop>).then((data) => ({ data, error: null })), COURIER_ROWS_WIDE_BATCH);
   const routeIds = [...new Set(stops.flatMap((s) => s.route_id ? [s.route_id] : []))];
   type Route = { id: string; route_date: string | null; rider_id: string | null };
   const { data: routes } = await courierRowsByIds<Route>(routeIds, (ids) => allCourierRows<Route>((from, to) => admin.from("delivery_routes")
-    .select("id,route_date,rider_id").in("id", ids).order("id").range(from, to) as unknown as Read<Route>).then((data) => ({ data, error: null })));
+    .select("id,route_date,rider_id").in("id", ids).order("id").range(from, to) as unknown as Read<Route>).then((data) => ({ data, error: null })), COURIER_ROWS_WIDE_BATCH);
   const riderIds = [...new Set(routes.flatMap((r) => r.rider_id ? [r.rider_id] : []))];
   type Rider = { id: string; full_name: string | null };
   const { data: riders } = await courierRowsByIds<Rider>(riderIds, (ids) => allCourierRows<Rider>((from, to) => admin.from("riders")
-    .select("id,full_name").in("id", ids).order("id").range(from, to) as unknown as Read<Rider>).then((data) => ({ data, error: null })));
+    .select("id,full_name").in("id", ids).order("id").range(from, to) as unknown as Read<Rider>).then((data) => ({ data, error: null })), COURIER_ROWS_WIDE_BATCH);
   const routeById = new Map(routes.map((r) => [r.id, r]));
   const riderById = new Map(riders.map((r) => [r.id, r.full_name]));
   const byOrder = new Map<string, LimaReportedRoute[]>();

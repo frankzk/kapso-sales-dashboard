@@ -6128,6 +6128,25 @@ pedía tres veces. Desde entonces:
 - No cambia ninguna regla: ni el candado, ni el episodio, ni qué se puede
   atender. Solo cuándo se lee.
 
+**Cuánto tarda cada lectura (owner, 25-11-2026: «que Repro Lima quede con
+carga rápida»).** Medido ese día, ya con una sola lectura por guardado: cada
+lectura de la pantalla tardaba de 2,3 a 3,6 s y hacía unas 260 consultas
+pequeñas a la base, porque cada tabla se leía de a 100 pedidos (12 tandas con
+los 1.184 pendientes de Lima). La base estaba quieta; lo que se esperaba era
+la fila de consultas, y con varias personas a la vez la fila crecía. Desde
+entonces:
+- **Cada tabla se lee de a 400 pedidos**: la cuarta parte de las consultas.
+- **Nunca una lista a medias.** Cada tanda pide a la base cuántas filas hay;
+  si llegaron menos (el servidor corta una respuesta muy grande sin avisar),
+  la tanda se parte en dos y se vuelve a leer. Una lectura que falla sigue
+  dejando la pantalla en error, no una lista incompleta.
+- **Los pedidos de la etapa no esperan sus páginas en fila**: se pide la
+  primera y las que faltan van juntas.
+- **Las cajas vigentes de Grupo GF, el proveedor y las salidas** se leen en
+  una sola espera, y el historial de rutas reportadas ya no hace fila al final.
+- No cambia qué se lee ni ninguna regla: la lista, los conteos y lo que se
+  puede hacer con cada pedido son los mismos.
+
 **Cuatro listas: etiquetas de pantalla, no subetapas.** «Por decidir»,
 «Llamar después», «Programados» y «Cerrados» se derivan del caso, del Master y
 del programa de Grupo GF. Ninguna es una subetapa: el pedido sigue en «En curso
@@ -9559,6 +9578,18 @@ la mitad de veces.
 - Se descartó calcular el reparto una sola vez para todas las asesoras: ahorra
   lo mismo (la mitad del reparto) con un cambio grande en `lead_routing_scope`
   y el mismo atraso. Prueba: `test/leads-live-poll.test.ts`.
+- **La cola de «Por llamar» se lee en tramos a la vez (25-11-2026, owner: «es
+  clave el tiempo de carga del sistema»).** Medido ese día: abrir o recargar
+  Leads tardaba de 2,9 a 9,8 s, y el 90 % era leer la lista: 12.513 leads en 13
+  viajes a la base, uno detrás de otro, aunque la base contestaba cada uno en
+  42 ms. Ahora la cola se lee en 16 tramos, de a 8 a la vez (los leads se
+  reparten parejo entre los tramos: de 727 a 823 cada uno), y empieza a leerse
+  sin esperar la respuesta del reparto. No cambia qué leads salen, en qué
+  orden, ni el reparto: la asesora ve la misma lista, y si el reparto no se
+  puede leer la lista no se muestra, igual que antes. La línea de tiempos de
+  Leads separa `lista` (leer la cola) de `productos` (reconocer el producto de
+  cada lead). Pruebas: `test/leads-access.test.ts` y
+  `test/lead-routing-board-access.test.ts`.
 
 **Por llamar: nuevos y reintentos en una sola cola (29-10-2026, decisión del owner).**
 La pestaña antes llamada «Sin llamar» se llama **Por llamar**. Las asesoras
