@@ -9578,6 +9578,18 @@ la mitad de veces.
 - Se descartó calcular el reparto una sola vez para todas las asesoras: ahorra
   lo mismo (la mitad del reparto) con un cambio grande en `lead_routing_scope`
   y el mismo atraso. Prueba: `test/leads-live-poll.test.ts`.
+- **La cola de «Por llamar» se lee en tramos a la vez (25-11-2026, owner: «es
+  clave el tiempo de carga del sistema»).** Medido ese día: abrir o recargar
+  Leads tardaba de 2,9 a 9,8 s, y el 90 % era leer la lista: 12.513 leads en 13
+  viajes a la base, uno detrás de otro, aunque la base contestaba cada uno en
+  42 ms. Ahora la cola se lee en 16 tramos, de a 8 a la vez (los leads se
+  reparten parejo entre los tramos: de 727 a 823 cada uno), y empieza a leerse
+  sin esperar la respuesta del reparto. No cambia qué leads salen, en qué
+  orden, ni el reparto: la asesora ve la misma lista, y si el reparto no se
+  puede leer la lista no se muestra, igual que antes. La línea de tiempos de
+  Leads separa `lista` (leer la cola) de `productos` (reconocer el producto de
+  cada lead). Pruebas: `test/leads-access.test.ts` y
+  `test/lead-routing-board-access.test.ts`.
 
 **Por llamar: nuevos y reintentos en una sola cola (29-10-2026, decisión del owner).**
 La pestaña antes llamada «Sin llamar» se llama **Por llamar**. Las asesoras

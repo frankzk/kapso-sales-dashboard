@@ -85,6 +85,23 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 25-11-2026 · Leads: la cola de «Por llamar» se lee en tramos a la vez (sin migración, MOM «La cola de Leads se revisa cada 60 s»)
+
+Sin migración, variables ni crons. Solo cambia cómo lee el servidor; la asesora ve la misma lista en el mismo orden.
+
+Por qué: medido el 25-11-2026, abrir o recargar Leads tardaba de 2,9 a 9,8 s y el 90 % era leer la lista (12.513
+leads en 13 viajes a la base, uno detrás de otro). Ahora son 16 tramos de ids, de a 8 a la vez, y la lectura empieza
+sin esperar la respuesta del reparto. A la base le cuesta menos que antes: medido igual en las dos formas, 10 ms y
+unos 950 bloques por tramo, contra 21 ms y 7.700 bloques por página de mil.
+
+Verificar, en Vercel → Logs, buscando `[leads] carga`:
+1. `lista` debería bajar: antes era cerca del 90 % de una carga de 2,9 a 9,8 s. Aparece un tiempo nuevo,
+   `productos`: lo que tarda en reconocer el producto de cada lead (antes iba sumado a `lista`).
+2. `filas` es el mismo número que el contador de «Por llamar» de la pantalla.
+3. En la pantalla: la lista, sus filtros y sus conteos son los mismos que antes del despliegue.
+
+Marcha atrás: revertir el commit. No toca datos.
+
 ### 25-11-2026 · Repro Lima: cada lectura hace la cuarta parte de las consultas (sin migración, MOM §9.5)
 
 Sin migración, variables ni crons. Solo cambia cómo lee el servidor; la pantalla muestra lo mismo.

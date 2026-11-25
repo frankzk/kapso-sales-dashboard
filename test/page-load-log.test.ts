@@ -85,7 +85,10 @@ describe("las cuatro pantallas dejan su línea", () => {
   });
 
   it("mide las lecturas que el análisis señaló como caras", () => {
-    for (const label of ["cola", "reparto", "lista", "coberturaAnterior"]) expect(pages.leads).toContain(`load.timed("${label}", `);
+    for (const label of ["cola", "reparto", "lista", "productos", "coberturaAnterior"]) expect(pages.leads).toContain(`load.timed("${label}", `);
+    // Leer la cola y reconocer el producto de cada lead iban en un solo tiempo (25-11-2026).
+    expect(pages.leads).toContain('load.timed("lista", getStoreLeads(scope, view, leadsViewLimit(view)))');
+    expect(pages.leads).toContain('.then((rows) => load.timed("productos", withProductOpeners(createAdminSupabase(), rows)));');
     for (const label of ["contadores", "pagina", "filtros", "agencias", "confirmacion", "productos", "comprobantes", "pagadoSinAviso", "distritos", "sinUbicacion"]) {
       expect(pages.pedidos).toContain(`load.timed("${label}", `);
     }
