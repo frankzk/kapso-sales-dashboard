@@ -51,3 +51,33 @@ export function pageLoadTimer(
     },
   };
 }
+
+/**
+ * Las etapas EN FILA de una lectura: cada marca anota cuánto pasó desde la
+ * anterior (`c.etapa`, `c.hechos`, `p.lecturas`…).
+ *
+ * POR QUÉ (owner, 25-11-2026: «que Repro Lima quede con carga rápida»). Con los
+ * lotes anchos Repro Lima bajó de 2,3–3,6 s a 1,6–2,3 s, menos de lo estimado,
+ * y `casos` y `pendientes` solos no dicen cuál de sus esperas en fila pesa. Con
+ * esto la línea `[repro-lima] carga` lo dice. Solo números; sin `times` no
+ * anota nada (los demás usos de esas lecturas no miden).
+ */
+export function stageClock(times: Record<string, number> | undefined, now: () => number = Date.now): (label: string) => void {
+  let last = now();
+  return (label) => {
+    const at = now();
+    if (times) times[label] = at - last;
+    last = at;
+  };
+}
+
+/** Una lectura que va A LA VEZ que otras dentro de una etapa. Sin `times` no mide. */
+export async function stageTimed<T>(times: Record<string, number> | undefined, label: string, work: Promise<T>, now: () => number = Date.now): Promise<T> {
+  if (!times) return work;
+  const from = now();
+  try {
+    return await work;
+  } finally {
+    times[label] = now() - from;
+  }
+}

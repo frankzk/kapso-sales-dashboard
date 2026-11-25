@@ -65,11 +65,12 @@ describe("quién entra (D11, E32, E36)", () => {
     expect(page).toContain('export const dynamic = "force-dynamic";');
     // Con `retries`: Despacho entra solo a «Reintentos Aliclik» (03-11-2026).
     const gate = page.indexOf("await requireReproLima({ retries: true })");
-    const load = page.indexOf("loadReproLima(createAdminSupabase(), scope, new Date(), { attention: true })");
+    // `times`: las dos lecturas dejan el tiempo de sus esperas en la línea de carga (25-11-2026).
+    const load = page.indexOf("loadReproLima(createAdminSupabase(), scope, new Date(), { attention: true, times })");
     expect(gate).toBeGreaterThan(-1);
     expect(load).toBeGreaterThan(gate);
     // «Todos» también se cuenta después del permiso, y llega al tablero.
-    expect(page.indexOf("loadLimaPending(createAdminSupabase(), scope)")).toBeGreaterThan(gate);
+    expect(page.indexOf("loadLimaPending(createAdminSupabase(), scope, new Date(), times)")).toBeGreaterThan(gate);
     expect(page).toContain("pending={pending}");
     expect(page).not.toContain("loadLimaOpenCounts");
   });
