@@ -53,7 +53,7 @@ export async function allCourierRowsCounted<T>(fetchPage: (from: number, to: num
   const page = async (index: number): Promise<{ rows: T[]; count: number | null }> => {
     const result = await fetchPage(index * size, index * size + size - 1, index === 0);
     if (result.error) throw new Error(result.error.message);
-    return { rows: result.data ?? [], count: typeof result.count === "number" ? result.count : null };
+    return { rows: result.data ?? [], count: typeof result.count === "number" && Number.isFinite(result.count) ? result.count : null };
   };
   const first = await page(0);
   const rows: T[] = [...first.rows];
@@ -166,7 +166,9 @@ export async function courierRowsByIdsWide<T>(ids: string[], read: (ids: string[
     const result = await read(batch);
     if (result.error) throw new Error(result.error.message);
     const rows = result.data ?? [];
-    const cut = typeof result.count === "number" ? result.count > rows.length : rows.length >= COURIER_ROWS_SAFE_RESPONSE;
+    // Un conteo que no es un número de verdad (el cliente lee `NaN` si el servidor no lo mandó) no cuenta.
+    const counted = typeof result.count === "number" && Number.isFinite(result.count);
+    const cut = counted ? result.count! > rows.length : rows.length >= COURIER_ROWS_SAFE_RESPONSE;
     if (!cut) return rows;
     if (batch.length === 1) throw new Error("Una lectura por lotes trajo más filas de las que caben en una respuesta para un solo id: tiene que ir paginada.");
     const half = Math.ceil(batch.length / 2);

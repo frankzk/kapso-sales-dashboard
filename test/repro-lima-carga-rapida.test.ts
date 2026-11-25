@@ -53,7 +53,9 @@ describe("Repro Lima lee cada tabla en la cuarta parte de las consultas", () => 
 
   it("los lotes anchos son de 400 ids y un lote cortado por el servidor se parte y se relee", () => {
     expect(flow).toContain("export const COURIER_ROWS_WIDE_BATCH = 400;");
-    expect(flow).toContain('const cut = typeof result.count === "number" ? result.count > rows.length : rows.length >= COURIER_ROWS_SAFE_RESPONSE;');
+    expect(flow).toContain("const cut = counted ? result.count! > rows.length : rows.length >= COURIER_ROWS_SAFE_RESPONSE;");
+    // Un conteo que no es un número de verdad no desactiva la guarda.
+    expect(flow).toContain('const counted = typeof result.count === "number" && Number.isFinite(result.count);');
     // Un solo id que no cabe no se devuelve a medias.
     expect(flow).toContain("if (batch.length === 1) throw new Error(");
   });

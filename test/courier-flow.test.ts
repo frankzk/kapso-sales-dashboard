@@ -138,6 +138,26 @@ describe("lotes anchos: menos consultas y nunca una respuesta cortada", () => {
     expect(small.calls).toEqual([400]);
   });
 
+  it("un conteo que no es un número (el servidor no lo mandó) vale como «sin conteo»: la guarda sigue", async () => {
+    // El cliente de la base lee `NaN` cuando la respuesta no trae el total.
+    const ids = Array.from({ length: 400 }, (_, i) => String(i));
+    const calls: number[] = [];
+    const result = await courierRowsByIdsWide(ids, async (batch) => {
+      calls.push(batch.length);
+      return { data: batch.flatMap((id) => [`${id}a`, `${id}b`]).slice(0, 500), error: null, count: Number.NaN };
+    });
+    expect(result.data).toEqual(ids.flatMap((id) => [`${id}a`, `${id}b`]));
+    expect(calls).toEqual([400, 200, 200]);
+    // Y en las páginas: sin un total de verdad se lee página por página.
+    const source = Array.from({ length: 1247 }, (_, i) => i);
+    const pages: number[] = [];
+    expect(await allCourierRowsCounted(async (from, to) => {
+      pages.push(from / 500);
+      return { data: source.slice(from, to + 1), error: null, count: Number.NaN };
+    })).toEqual(source);
+    expect(pages).toEqual([0, 1, 2]);
+  });
+
   it("parte tantas veces como haga falta y conserva el orden de los ids", async () => {
     // Tope de 300 filas. El id «7» trae 250 y los demás 30: el lote de 16 no cabe, su primera mitad
     // tampoco, y la mitad de esa mitad tampoco.
