@@ -34,7 +34,8 @@ import { buildGfOrderInput, gfOrderNote } from "@/lib/gf-courier-order";
 import { isWebPrepaid } from "@/lib/order-paid";
 import { GF_COURIER } from "@/lib/gf-courier-track";
 import { loadGfProducts } from "@/lib/gf-courier-catalog-server";
-import type { GfCatalogProduct } from "@/lib/gf-courier-catalog";
+import { gfMissingSkus, type GfCatalogProduct } from "@/lib/gf-courier-catalog";
+import { gfCourier } from "@/lib/gf-courier";
 import { loadCompanionRides } from "@/lib/order-companion-access";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
@@ -55,7 +56,9 @@ import {
   gfAutoSimulationDetail,
   gfAutoSkip,
   gfAutoTriedOn,
+  gfCatalogCannotUpload,
   gfCatalogProblem,
+  gfCatalogUploadNote,
   isGfAutoOutcome,
   type GfAutoMode,
   type GfAutoOutcome,
@@ -242,7 +245,8 @@ async function pendingGfIntent(admin: SupabaseClient, orderId: string): Promise<
   return { pending: (data ?? []).length > 0 };
 }
 
-type CatalogRead = { products: GfCatalogProduct[] } | { error: string };
+/** `canUpload`: el token tiene catalogue:write, así que un SKU que falta se sube al crear (no es un fallo). */
+type CatalogRead = { products: GfCatalogProduct[]; canUpload: boolean } | { error: string };
 
 /**
  * Lo que `createGfGuideFor` comprobaría antes del POST, sin escribir nada: las
@@ -283,9 +287,15 @@ async function previewGfGuide(
   if (!built.ok) return { ok: false, error: built.reason };
 
   const read = await catalog();
+  // Un SKU que GF no tiene se sube al crear la guía si el token puede (owner, 26-11-2026, #KP201969): no es un fallo.
+  let upload: string[] = [];
   if ("products" in read) {
-    const problem = gfCatalogProblem(built.input.items.map((item) => item.sku), read.products);
-    if (problem) return { ok: false, error: problem };
+    const skus = built.input.items.map((item) => item.sku);
+    const missing = gfMissingSkus(skus, read.products);
+    if (read.canUpload) upload = missing;
+    const pending = new Set(upload.map((s) => s.toUpperCase()));
+    const problem = gfCatalogProblem(skus.filter((s) => !pending.has(s.trim().toUpperCase())), read.products);
+    if (problem) return { ok: false, error: missing.length && !read.canUpload ? `${problem} ${gfCatalogCannotUpload()}` : problem };
   }
   return {
     ok: true,
@@ -293,7 +303,7 @@ async function previewGfGuide(
       amountToCollect: built.input.payment.amount_to_collect,
       units: lines.reduce((s, l) => s + (Number.isFinite(l.quantity) ? l.quantity : 0), 0),
       district: row.district,
-      catalogNote: "error" in read ? `No se pudo leer el catálogo de GF para revisar los SKU (${read.error}).` : null,
+      catalogNote: "error" in read ? `No se pudo leer el catálogo de GF para revisar los SKU (${read.error}).` : upload.length ? gfCatalogUploadNote(upload) : null,
     }),
   };
 }
@@ -434,8 +444,8 @@ export async function runGfAutoGuides(
   const catalogOf = (store: GfReadyStore) => () => {
     let read = catalogs.get(store.id);
     if (!read) {
-      read = loadGfProducts(store.token)
-        .then((r): CatalogRead => (r.ok ? { products: r.products } : { error: r.message }))
+      read = Promise.all([loadGfProducts(store.token), gfCourier.me({ apiToken: store.token })])
+        .then(([r, me]): CatalogRead => (r.ok ? { products: r.products, canUpload: me.ok && me.data.permissions.includes("catalogue:write") } : { error: r.message }))
         .catch((e): CatalogRead => ({ error: e instanceof Error ? e.message : String(e) }));
       catalogs.set(store.id, read);
     }

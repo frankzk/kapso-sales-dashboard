@@ -21271,8 +21271,31 @@ vende en Kapta existe en GF, sin importar archivos. GF lo permite con `POST /v1/
   repetido en dos variantes va una vez y se informa.
 - **«Probar conexión»** avisa si al token le falta `catalogue:write`: todo funciona, pero el catálogo no se sincroniza
   solo. Sin ese permiso sigue la carga a mano (CSV «solo los que faltan»).
-- **Dónde vive:** `planGfCatalogSync` en `lib/gf-courier-catalog.ts` (pura, con prueba) y
-  `lib/gf-catalog-sync-server.ts`.
+- **Registro (owner, 26-11-2026, #KP201969).** Antes la corrida no dejaba rastro: una tienda sin `catalogue:write`
+  podía pasar semanas sin sincronizar sin que nadie lo viera. Ahora:
+  - cada corrida (cron o «Sincronizar ahora») guarda su resultado en `sync_state`, fuente `gf_catalog`: estado, hora y
+    el resumen en `cursor` si salió bien, o en `error` si no;
+  - Configuración → GF Courier muestra «Última sincronización del catálogo», en rojo si falló;
+  - Configuración → Sincronización lo lista como «Catálogo GF Courier»;
+  - el cron lo escribe también en el log (`[gf-catalog-sync] <tienda>: …`, como advertencia si falló).
+  La simulación (`?dry=1`) no se guarda.
+- **El SKU que falta al crear la guía (owner, 26-11-2026, #KP201969).** Owner: «¿por qué el shampoo de cebolla de
+  kenku.pe no está en GF Courier?… sí, así automatizamos».
+  - Si al crear la guía GF responde `SKU_NOT_FOUND`, `createGfGuideFor` sube **ese** SKU al catálogo de la tienda en
+    GF (`uploadGfSku`, el mismo `POST /v1/products/batch` con clave `KP-SKU-…`) y reintenta la guía con la **misma**
+    `Idempotency-Key`. GF no guarda un rechazo en su idempotencia.
+  - El producto sube «En existencias» y sin conteo, con el nombre de la línea del pedido («título – variante»), como
+    lo crea la sincronización (que después le pone el del catálogo vivo si cambia).
+  - Es un SKU por vuelta y como mucho uno por línea del pedido.
+  - La guía creada guarda los SKU subidos en su hecho `guide_registered` (`gf_catalog_uploaded`).
+  - Si no se puede subir (sin `catalogue:write`, producto que GF desactivó para la tienda…), no se reintenta y el error
+    de la guía lo dice: «Kapta intentó subir el SKU X al catálogo de GF y no pudo: …». En `gf_order_requests` queda
+    `catalog_upload_error`.
+  - No toca lo que GF tiene **Agotado** (`OUT_OF_STOCK`): eso lo decide la tienda o GF.
+- **Dónde vive:** `planGfCatalogSync`, `gfMissingSkus`, `gfSkuNotFound` y `gfSkuUploadItem` en
+  `lib/gf-courier-catalog.ts` (puras, con prueba); `lib/gf-catalog-sync-server.ts` (sincronización y registro) y
+  `lib/gf-catalog-upload-server.ts` (subida de un SKU). Pruebas: `test/gf-catalog-sync.test.ts` y
+  `test/gf-sku-upload.test.ts`.
 
 **«No responde antes de salir» (owner, 15-11-2026).** En las rutas donde GF llama antes de salir (la de Alexis),
 Despacho de GF marca «No responde» al pedido que no contesta: sale de la carga de hoy y **pasa al siguiente día de
@@ -21354,8 +21377,8 @@ exactamente los SKU que la tienda vende, y cada pedido viaja con el mismo SKU.
 - «Comparar catálogo con GF» (misma sección, solo lectura) lee el catálogo vivo y el de la tienda en GF
   (`GET /v1/products`) y dice qué SKU **faltan en GF** (un pedido con ellos respondería `SKU_NOT_FOUND`) y cuáles GF
   tiene **Agotados** (`OUT_OF_STOCK`). «Solo los que faltan en GF» (`?only=missing`) descarga únicamente esos.
-- La sincronización automática Kapta → GF todavía no existe: un producto nuevo se exporta e importa, y GF no duplica
-  lo que ya tenía.
+- Desde el 16-11-2026 la sincronización es automática (arriba, «Catálogo sincronizado con GF»). El CSV queda para la
+  tienda cuyo token no tiene `catalogue:write`; GF no duplica lo que ya tenía.
 
 #### Guía GF automática (owner, 15-11-2026; «ni bien entra el pedido», 16-11-2026)
 
@@ -21398,7 +21421,9 @@ guía GF que GF todavía no asignó.
 - **Qué queda.** La guía creada lleva su hecho `guide_registered` sin actor (lo creó el sistema), igual que la que
   vincula `gf-reconcile`. En el registro del panel (`gf_auto_guide_log`) queda el renglón `creada` con el número `GF…`.
 - **Si falla: una alerta por ese pedido.** Falla si falta el SKU, el apellido o el distrito, o si GF responde
-  `SKU_NOT_FOUND`, `DISTRICT_NOT_COVERED` u `OUT_OF_STOCK`. Entonces:
+  `SKU_NOT_FOUND`, `DISTRICT_NOT_COVERED` u `OUT_OF_STOCK`. Antes de fallar por `SKU_NOT_FOUND`, la creación sube el SKU
+  al catálogo de GF y reintenta (arriba, «El SKU que falta al crear la guía»): solo falla si no lo pudo subir, y el
+  motivo lo dice. Entonces:
   - avisa por Telegram al grupo de alertas urgentes de la tienda (o, si no tiene, al del resumen diario), con el
     pedido, la clienta, el motivo y el enlace a la ficha;
   - deja el hecho `gf_auto_guide_failed` en el historial («Guía GF automática no creada»), con el motivo y la fecha;
@@ -21418,7 +21443,12 @@ guía GF que GF todavía no asignó.
   - **Apagado**: no hace nada.
   - **Simulación**: dice qué guía habría creado. No crea nada afuera, no avisa y no escribe en el historial del
     pedido. Hace las mismas lecturas que la creación hasta antes del POST y compara los SKU con el catálogo de la
-    tienda en GF (`GET /v1/products`, solo lectura), así anticipa `SKU_NOT_FOUND` y `OUT_OF_STOCK`. La cobertura del
+    tienda en GF (`GET /v1/products`, solo lectura), así anticipa `SKU_NOT_FOUND` y `OUT_OF_STOCK`.
+    - Si el token tiene `catalogue:write` (lo lee de `GET /v1/me`, una vez por tienda y pasada), un SKU que falta no
+      es un fallo: la creación lo subiría. El detalle lo dice: «GF no tiene el SKU X: Kapta lo subirá a su catálogo
+      al crear la guía.».
+    - Sin ese permiso sigue siendo «No la crearía», con «Kapta no puede subirlo solo: al token de GF le falta el
+      permiso catalogue:write.». La cobertura del
     distrito solo la responde GF al crear: la simulación no la sabe. Deja un renglón por pedido y día en
     `gf_auto_guide_log` (`simulada`, o `fallo` = «No la crearía»), como los reintentos de Lima (§9.5).
   - **Activo**: crea. Pide confirmación en el panel. No se deja elegir sin `GF_COURIER_WRITE_ENABLED` ni sin una

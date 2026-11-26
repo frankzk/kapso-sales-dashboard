@@ -493,8 +493,12 @@ const INDEX: IndexGroup[] = [
   },
 ];
 
+/** Fuentes con nombre propio en la tabla de sincronización. */
+const SOURCE_NAMES: Record<string, string> = { gf_catalog: "Catálogo GF Courier" };
+
 /** El nombre de una fuente de sincronización (`shopify_all` → «Shopify all»). */
 function sourceLabel(source: string): string {
+  if (SOURCE_NAMES[source]) return SOURCE_NAMES[source];
   const words = source.replace(/_/g, " ");
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
@@ -647,6 +651,7 @@ export function StoreSettings({
               hasToken={has.gfCourierToken}
               hasSecret={has.gfCourierWebhookSecret}
               enabled={s.gf_courier_enabled}
+              lastCatalogSync={data.sync.find((r) => r.source === "gf_catalog") ?? null}
             />
             <AliclikSection
               siteUrl={data.siteUrl}
@@ -1669,7 +1674,11 @@ function AliclikSection({
  * GF Courier por API (MOM §29.17): reemplaza al reparto propio de Grupo GF. Token de la credencial de integración que
  * emite GF, «Conectar webhook» (acuña el secreto, lo registra en GF y lo guarda cifrado, sin mostrarlo) e interruptor.
  */
-function GfCourierSection({ storeId, hasToken, hasSecret, enabled }: { storeId: string; hasToken: boolean; hasSecret: boolean; enabled: boolean }) {
+function GfCourierSection({ storeId, hasToken, hasSecret, enabled, lastCatalogSync }: {
+  storeId: string; hasToken: boolean; hasSecret: boolean; enabled: boolean;
+  /** La última sincronización del catálogo (cron o botón), de `sync_state` (owner, 26-11-2026, #KP201969). */
+  lastCatalogSync: StoreSettingsData["sync"][number] | null;
+}) {
   const [testState, testAction, testPending] = useActionState(testGfCourierConnection, initial);
   const [hookState, hookAction, hookPending] = useActionState(connectGfCourierWebhook, initial);
   const [catalogState, catalogAction, catalogPending] = useActionState(checkGfCatalog, initial);
@@ -1715,10 +1724,19 @@ function GfCourierSection({ storeId, hasToken, hasSecret, enabled }: { storeId: 
           resume qué impide crearlas.
         </p>
       ) : null}
+      {hasToken ? (
+        <p className={cn(HELP, lastCatalogSync?.status === "error" && "text-crit-fg")}>
+          <strong>Última sincronización del catálogo:</strong>{" "}
+          {lastCatalogSync
+            ? `${when(lastCatalogSync.last_run_at)} · ${lastCatalogSync.error ?? lastCatalogSync.cursor ?? "sin detalle"}`
+            : "todavía no hay registro (se guarda desde la próxima corrida)."}
+        </p>
+      ) : null}
       <p className={HELP}>
         <strong>Catálogo para GF:</strong> GF solo despacha los SKU que tiene registrados para esta tienda. Se sincroniza solo cada
         hora (y con «Sincronizar ahora») si el token tiene el permiso <code>catalogue:write</code>: sube lo que falta o cambió de
-        nombre y pasa a «Agotado» lo que la tienda dejó de vender. Sin ese permiso, a mano:{" "}
+        nombre y pasa a «Agotado» lo que la tienda dejó de vender. Además, si al crear una guía GF dice que no tiene un SKU,
+        Kapta lo sube en ese momento y reintenta la guía. Sin ese permiso, a mano:{" "}
         <a href={`/api/stores/${storeId}/gf-catalog`} className="font-medium text-slate-900 underline" download>
           Descargar catálogo para GF (CSV)
         </a>

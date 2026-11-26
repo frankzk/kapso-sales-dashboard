@@ -195,6 +195,19 @@ export function gfCatalogProblem(skus: readonly string[], products: readonly GfC
   return null;
 }
 
+/**
+ * La simulación ante un SKU que GF no tiene y el token sí puede subir (catalogue:write): la creación lo sube y reintenta
+ * (owner, 26-11-2026, #KP201969), así que no es un fallo. Pura.
+ */
+export function gfCatalogUploadNote(skus: readonly string[]): string {
+  return `GF no tiene ${skuList(skus)}: Kapta ${skus.length === 1 ? "lo subirá" : "los subirá"} a su catálogo al crear la guía.`;
+}
+
+/** Lo que se agrega al fallo de un SKU que falta cuando el token no puede subirlo. */
+export function gfCatalogCannotUpload(): string {
+  return "Kapta no puede subirlo solo: al token de GF le falta el permiso catalogue:write.";
+}
+
 function skuList(skus: readonly string[]): string {
   return skus.length === 1 ? `el SKU ${skus[0]}` : `los SKU ${skus.join(", ")}`;
 }
