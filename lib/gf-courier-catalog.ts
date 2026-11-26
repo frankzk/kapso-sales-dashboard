@@ -117,3 +117,37 @@ export function gfSyncBatches(plan: GfSyncPlan, size = GF_BATCH_SIZE): GfSyncIte
   for (let i = 0; i < all.length; i += size) out.push(all.slice(i, i + size));
   return out;
 }
+
+// ---- El SKU que GF no tiene, al crear la guía (owner, 26-11-2026, #KP201969: «el shampoo de cebolla de kenku.pe no
+// está en GF courier… sí, así automatizamos»). Si GF responde SKU_NOT_FOUND, Kapta sube ese SKU al catálogo de la
+// tienda en GF (el mismo POST /v1/products/batch de la sincronización) y reintenta la guía con la misma clave. ----
+
+/** SKU de la lista que GF no tiene en el catálogo de la tienda, sin distinguir mayúsculas, en orden y sin repetir. */
+export function gfMissingSkus(skus: readonly string[], gf: readonly GfCatalogProduct[]): string[] {
+  const first = new Map<string, string>();
+  for (const s of skus.map((v) => v.trim()).filter(Boolean)) if (!first.has(s.toUpperCase())) first.set(s.toUpperCase(), s);
+  const unique = [...first.values()];
+  return compareGfCatalog(unique.map((sku) => ({ sku, name: sku })), gf).missingInGf.map((r) => r.sku);
+}
+
+/**
+ * El SKU que GF dice que no tiene, a partir de su error: el campo `items.N.sku` señala la línea; si no, el texto
+ * «El SKU X no está en el catálogo…». Otro código de error: null.
+ */
+export function gfSkuNotFound(error: { code: string; field?: string; message?: string }, items: readonly { sku: string }[]): string | null {
+  if (error.code !== "SKU_NOT_FOUND") return null;
+  const index = /^items\.(\d+)\.sku$/.exec(error.field ?? "")?.[1];
+  const fromField = index !== undefined ? clean(items[Number(index)]?.sku) : "";
+  if (fromField) return fromField;
+  return /El SKU (\S+) no está/u.exec(error.message ?? "")?.[1] ?? null;
+}
+
+/**
+ * El producto que se sube a GF para un SKU del pedido: el nombre de la línea del pedido como lo arma la sincronización
+ * («título – variante»), o el SKU si la línea no trae nombre. Se crea «En existencias» y sin conteo, como en la
+ * sincronización de cada hora (que después le pone el nombre del catálogo vivo si cambia).
+ */
+export function gfSkuUploadItem(sku: string, line: { title?: string | null; variantTitle?: string | null } | null): GfSyncItem {
+  const name = line ? gfCatalogName(line.title ?? "", line.variantTitle ?? null) : "";
+  return { sku: sku.trim(), name: name || sku.trim(), sales_status: "IN_STOCK" };
+}

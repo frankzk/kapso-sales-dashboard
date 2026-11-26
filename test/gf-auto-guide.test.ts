@@ -20,7 +20,9 @@ import {
   gfAutoSimulationDetail,
   gfAutoSkip,
   gfAutoTriedOn,
+  gfCatalogCannotUpload,
   gfCatalogProblem,
+  gfCatalogUploadNote,
   isGfAutoOutcome,
   type GfAutoRow,
 } from "@/lib/gf-auto-guide";
@@ -226,9 +228,11 @@ describe("Simulación: dice qué guía habría creado, sin crear nada afuera", (
 
   it("la vista previa solo lee: ni POST a GF, ni escrituras", () => {
     expect(preview).not.toMatch(/createOrder|createGfGuideFor|\.insert\(|\.update\(|\.upsert\(|\.delete\(/);
-    expect(preview).toContain("gfCatalogProblem(built.input.items.map((item) => item.sku), read.products)");
-    // El catálogo de GF se lee una vez por tienda y pasada, con GET /v1/products.
-    expect(runner).toContain("read = loadGfProducts(store.token)");
+    expect(preview).toContain("gfCatalogProblem(skus.filter((s) => !pending.has(s.trim().toUpperCase())), read.products)");
+    // El catálogo de GF se lee una vez por tienda y pasada, con GET /v1/products, y GET /v1/me dice si el token puede
+    // subir lo que falta (catalogue:write).
+    expect(runner).toContain("read = Promise.all([loadGfProducts(store.token), gfCourier.me({ apiToken: store.token })])");
+    expect(runner).toContain('canUpload: me.ok && me.data.permissions.includes("catalogue:write")');
   });
 
   it("hace las MISMAS lecturas que la creación hasta antes del POST", () => {
@@ -270,6 +274,15 @@ describe("Simulación: dice qué guía habría creado, sin crear nada afuera", (
       "GF no tiene en su catálogo los SKU AUR-009, AUR-010: respondería SKU_NOT_FOUND.",
     );
     expect(gfCatalogProblem(["AUR-001", "AUR-002"], gf)).toBe("GF tiene Agotado el SKU AUR-002: respondería OUT_OF_STOCK.");
+  });
+
+  it("un SKU que falta y el token puede subir no es un fallo: lo dice en el detalle (owner, 26-11-2026, #KP201969)", () => {
+    expect(gfCatalogUploadNote(["453375647"])).toBe("GF no tiene el SKU 453375647: Kapta lo subirá a su catálogo al crear la guía.");
+    expect(gfCatalogUploadNote(["A", "B"])).toBe("GF no tiene los SKU A, B: Kapta los subirá a su catálogo al crear la guía.");
+    expect(gfCatalogCannotUpload()).toMatch(/catalogue:write/);
+    // Sin el permiso sigue siendo un fallo, con el porqué; con permiso, solo se revisa lo Agotado del resto.
+    expect(preview).toContain("missing.length && !read.canUpload ? `${problem} ${gfCatalogCannotUpload()}` : problem");
+    expect(preview).toContain("upload.length ? gfCatalogUploadNote(upload) : null");
   });
 
   it("lo que dice de la guía que habría creado", () => {
