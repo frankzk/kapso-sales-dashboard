@@ -4,7 +4,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
-import { buildSystemPrompt, buildUserPrompt, isMetaSystemNotice, isUnreachableError, parseAiReply, sanitizeAiText, SOCIAL_AI_MODEL, type SocialAiInput } from "@/lib/social-ai";
+import { buildSystemPrompt, buildUserPrompt, isMetaSystemNotice, isPersonUnavailable, isUnreachableError, parseAiReply, sanitizeAiText, SOCIAL_AI_MODEL, type SocialAiInput } from "@/lib/social-ai";
 import { generateSocialAiReply } from "@/lib/social-ai-server";
 
 const WA = "https://wa.me/51989256981?text=Hola%2C%20vengo%20de%20redes";
@@ -181,6 +181,23 @@ describe("«Responder con IA» y la reserva propia (25-11-2026)", () => {
   });
   it("a mano, después del público sigue el privado", () => {
     expect(read("components/social-inbox.tsx")).toContain("Enviado en público. Ahora el privado.");
+  });
+});
+
+describe("nada se queda colgado en «Por responder» (26-11-2026)", () => {
+  it("un mensaje corto o poco claro se responde; omitir solo emojis, etiquetas o spam", () => {
+    expect(buildSystemPrompt("Kenku Peru")).toContain("Un mensaje muy corto o poco claro («Za», «?», «info») sí se responde");
+  });
+  it("lo omitido y lo que Meta rechaza con #551 sale de «Por responder»", () => {
+    const src = read("lib/social-auto-server.ts");
+    expect(src).toContain("if (draft?.skip) { await resolveSkipped(admin, thread.id);");
+    expect(src).toContain("isPersonUnavailable(error)");
+    expect(src).toContain("await personUnavailableBefore(admin, thread.id)");
+    expect(isPersonUnavailable("Zernio no lo envió: (#551) Esta persona no está disponible en este momento.")).toBe(true);
+    expect(isPersonUnavailable("window has closed")).toBe(false);
+  });
+  it("«Todas» muestra el listado completo", () => {
+    expect(read("components/social-inbox.tsx")).toContain('<ChoiceChip label="Todas" count={counts.todas}');
   });
 });
 

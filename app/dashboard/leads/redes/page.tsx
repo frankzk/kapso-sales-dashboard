@@ -32,7 +32,7 @@ async function RedesContent() {
   const [{ data: threads }, { data: accounts }] = await Promise.all([
     sb.from("social_threads")
       .select("id,store_id,account_id,platform,kind,post_text,post_permalink,post_image_url,ad_id,participant_name,participant_username,participant_picture,last_inbound_at,last_message_at,last_message_text,last_direction,unread,status,private_reply_at,created_at")
-      .order("last_message_at", { ascending: false, nullsFirst: false }).limit(300),
+      .order("last_message_at", { ascending: false, nullsFirst: false }).limit(1000),
     // Quien gestiona tiendas ve también las cuentas sin tienda, para asignarlas.
     canManage
       ? createAdminSupabase().from("social_accounts").select("account_id,store_id,platform,username,display_name,active")

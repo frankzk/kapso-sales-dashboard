@@ -62,7 +62,7 @@ export interface SocialAccountView {
   active: boolean;
 }
 
-type StatusFilter = "pendientes" | "todos" | "cerrados";
+type StatusFilter = "pendientes" | "todos" | "cerrados" | "todas";
 type Net = "facebook" | "instagram";
 type Kind = "comment" | "dm";
 
@@ -77,6 +77,7 @@ function isPending(t: SocialThreadView): boolean {
 }
 
 function matchesStatus(t: SocialThreadView, status: StatusFilter): boolean {
+  if (status === "todas") return true;
   return status === "pendientes" ? isPending(t) : status === "cerrados" ? t.status === "cerrado" : t.status !== "cerrado";
 }
 
@@ -160,6 +161,7 @@ export function SocialInbox({ threads, accounts, stores, canManage, configured, 
     pendientes: threads.filter(isPending).length,
     todos: threads.filter((t) => t.status !== "cerrado").length,
     cerrados: threads.filter((t) => t.status === "cerrado").length,
+    todas: threads.length,
   }), [threads]);
   // Cada fila de chips cuenta lo que quedaría con los otros filtros puestos.
   const facet = useMemo(() => {
@@ -282,6 +284,7 @@ export function SocialInbox({ threads, accounts, stores, canManage, configured, 
         <ChoiceChip label="Por responder" count={counts.pendientes} active={status === "pendientes"} onClick={() => setStatus("pendientes")} />
         <ChoiceChip label="Abiertas" count={counts.todos} active={status === "todos"} onClick={() => setStatus("todos")} title="Todo lo que no está resuelto, respondido o no" />
         <ChoiceChip label="Resueltas" count={counts.cerrados} active={status === "cerrados"} onClick={() => setStatus("cerrados")} />
+        <ChoiceChip label="Todas" count={counts.todas} active={status === "todas"} onClick={() => setStatus("todas")} title="Todas las conversaciones: abiertas y resueltas" />
         <span aria-hidden className="mx-1 hidden h-5 w-px bg-line-strong sm:block" />
         <ChoiceChip label="Facebook" count={facet.facebook} active={net === "facebook"} onClick={() => setNet((v) => (v === "facebook" ? null : "facebook"))} />
         <ChoiceChip label="Instagram" count={facet.instagram} active={net === "instagram"} onClick={() => setNet((v) => (v === "instagram" ? null : "instagram"))} />
@@ -297,7 +300,7 @@ export function SocialInbox({ threads, accounts, stores, canManage, configured, 
         <section className={cn("flex min-h-0 flex-col overflow-hidden rounded-lg bg-white shadow-control ring-1 ring-line", selected && "hidden lg:flex")} aria-label="Conversaciones">
           <div className="space-y-2 border-b border-line px-4 py-3">
             <p className="flex items-baseline justify-between gap-2 text-sm font-semibold text-ink-900">
-              {status === "pendientes" ? "Por responder" : status === "cerrados" ? "Resueltas" : "Abiertas"}
+              {status === "pendientes" ? "Por responder" : status === "cerrados" ? "Resueltas" : status === "todas" ? "Todas" : "Abiertas"}
               <span className="text-[13px] font-medium tabular-nums text-ink-500">{visible.length.toLocaleString("es-PE")}</span>
             </p>
             <label className="relative block">

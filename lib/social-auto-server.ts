@@ -14,7 +14,7 @@ import { wooGetPage } from "@/lib/woocommerce";
 import { withWooAuthFallback } from "@/lib/woocommerce-intake";
 import { zernioConfigured } from "@/lib/zernio";
 import { generateSocialAiReply, socialAiConfigured, storeCatalog } from "@/lib/social-ai-server";
-import { isMetaSystemNotice, isUnreachableError, type SocialAiReply } from "@/lib/social-ai";
+import { isMetaSystemNotice, isPersonUnavailable, isUnreachableError, type SocialAiReply } from "@/lib/social-ai";
 
 export async function loadAutoSettings(admin: SupabaseClient, storeId: string): Promise<SocialAutoSettings | null> {
   const { data } = await admin.from("social_auto_settings").select("enabled,comment_keywords,public_text,private_text,dm_text").eq("store_id", storeId).maybeSingle();
@@ -156,6 +156,15 @@ async function metaRefusedBefore(admin: SupabaseClient, threadId: string): Promi
     .some((m) => isUnreachableError(m.error) && (!lastIn || Date.parse(m.created_at) > Date.parse(lastIn)));
 }
 
+/** ¿El último rechazo de Meta a esta persona fue #551 (no recibe mensajes) y ella no escribió después? */
+async function personUnavailableBefore(admin: SupabaseClient, threadId: string): Promise<boolean> {
+  const { data } = await admin.from("social_messages").select("error,created_at").eq("thread_id", threadId)
+    .eq("direction", "out").eq("status", "fallo").order("created_at", { ascending: false }).limit(5);
+  const lastIn = await lastRealInboundAt(admin, threadId);
+  return ((data as Array<{ error: string | null; created_at: string }> | null) ?? [])
+    .some((m) => isPersonUnavailable(m.error) && (!lastIn || Date.parse(m.created_at) > Date.parse(lastIn)));
+}
+
 /** El último mensaje de verdad de la clienta (sin los avisos que mete Meta). */
 async function lastRealInboundAt(admin: SupabaseClient, threadId: string): Promise<string | null> {
   const { data } = await admin.from("social_messages").select("text,occurred_at").eq("thread_id", threadId)
@@ -187,7 +196,7 @@ async function runAi(admin: SupabaseClient, ev: Exclude<NormalizedEvent, { kind:
   if (draft === "sin_turno") return [];
   const reply = draft;
   if (!reply) return null;
-  if (reply.skip) return [];
+  if (reply.skip) { await resolveSkipped(admin, thread.id); return []; }
 
   const done: string[] = [];
   if (ev.kind === "comment") {
@@ -275,13 +284,19 @@ export async function answerOneWithAi(admin: SupabaseClient, threadId: string, a
   if (thread.kind === "dm") {
     // La ventana cuenta desde el último mensaje de verdad (no los avisos de Meta), y si Meta ya dijo que no, no se insiste.
     const realIn = await lastRealInboundAt(admin, thread.id);
+    if (await personUnavailableBefore(admin, thread.id)) {
+      // Meta ya dijo #551 y no volvió a escribir: nadie puede escribirle, sale de «Por responder».
+      await resolveSkipped(admin, thread.id);
+      return { outcome: "fuera_de_ventana" };
+    }
     if (dmReplyMode(realIn) !== "libre" || await metaRefusedBefore(admin, thread.id)) return { outcome: "fuera_de_ventana" };
   }
   const claimedAt = Date.parse(thread.claimed_at ?? "");
   if (thread.claimed_by && thread.claimed_by !== actorId && Number.isFinite(claimedAt) && Date.now() - claimedAt < HUMAN_HOLD_MS) return { outcome: "tomada" };
   if (!phones.has(thread.store_id)) phones.set(thread.store_id, await storeWhatsappPhone(admin, thread.store_id));
   const draft = await draftAiReply(admin, thread, phones.get(thread.store_id) ?? null);
-  if (draft === "sin_turno" || draft?.skip) return { outcome: "omitida" };
+  if (draft === "sin_turno") return { outcome: "omitida" };
+  if (draft?.skip) { await resolveSkipped(admin, thread.id); return { outcome: "omitida" }; }
   if (!draft) return { outcome: "fallida", error: "La IA no pudo responder ahora." };
   const { data: lastIn } = await admin.from("social_messages").select("external_id,occurred_at").eq("thread_id", thread.id)
     .eq("direction", "in").order("occurred_at", { ascending: false }).limit(1).maybeSingle();
@@ -308,7 +323,17 @@ export async function answerOneWithAi(admin: SupabaseClient, threadId: string, a
     const r = await sendSocial(admin, thread, { text: draft.privateText, mode: "dm", userId: null, via: "auto", idempotencyKey: key });
     if (r.ok) sent = true; else error = r.error;
   }
+  if (!sent && isPersonUnavailable(error)) {
+    // Nadie puede escribirle (#551): sale de «Por responder»; si vuelve a escribir, se reabre sola.
+    await admin.from("social_threads").update({ status: "cerrado", updated_at: new Date().toISOString() }).eq("id", thread.id);
+    return { outcome: "fuera_de_ventana", error };
+  }
   return sent ? { outcome: "respondida" } : { outcome: "fallida", error };
+}
+
+/** Solo emojis, etiquetas o spam: no se responde y sale de «Por responder» (se reabre si escribe de nuevo). */
+async function resolveSkipped(admin: SupabaseClient, threadId: string): Promise<void> {
+  await admin.from("social_threads").update({ status: "cerrado", updated_at: new Date().toISOString() }).eq("id", threadId);
 }
 
 export async function answerPendingWithAi(admin: SupabaseClient, storeIds: string[], actorId: string | null = null): Promise<PendingAiResult> {

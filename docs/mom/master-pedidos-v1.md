@@ -17925,6 +17925,15 @@ estructurada (`lib/social-ai.ts`, `lib/social-ai-server.ts`):
   envía ya con la misma regla (comentario: público y privado; mensaje directo:
   dentro de 24 h; `answerOneWithAi`). A mano, después de enviar el público de un
   comentario, la respuesta pasa sola a «Por privado» para mandar el privado.
+- **Nada se queda colgado (26-11-2026: «Za» de Zacarias y el #551 de Oscar
+  seguían en «Por responder»).** Un mensaje corto o poco claro se responde
+  (saludo y «¿en qué te ayudamos?»); la IA omite solo lo que es emojis,
+  etiquetas o spam, y eso pasa a «Resueltas». Si Meta rechaza con #551 (la
+  persona no recibe mensajes), la conversación también pasa a «Resueltas»: nadie
+  puede escribirle. Las dos se reabren solas si la clienta vuelve a escribir.
+  Los mensajes directos de más de 24 h siguen en «Por responder» para las
+  asesoras. **«Todas»** (chip junto a «Resueltas») muestra el listado completo;
+  la bandeja carga hasta 1000 conversaciones.
 
 Implementación: `lib/zernio.ts` (cliente), `lib/social-inbox.ts` (lectura de
 avisos y plazos de Meta, puro), `lib/zernio-signature.ts`,
