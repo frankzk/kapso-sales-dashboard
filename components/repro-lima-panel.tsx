@@ -881,8 +881,9 @@ export function ReproLimaPanel({
         notice: result.notice ?? null,
         error: result.error ?? null,
         mesa: Boolean(result.href),
-        // `callId` solo vuelve cuando la acción ya revalidó la página (recordCall).
-        refreshed: Boolean(result.callId),
+        // `callId` vuelve con la página ya revalidada (recordCall), salvo que la
+        // acción la haya dejado para después (`refreshDeferred`, al pasar al siguiente).
+        refreshed: Boolean(result.callId) && !result.refreshDeferred,
       }, advance);
       return;
     }
@@ -934,6 +935,8 @@ export function ReproLimaPanel({
       if (needsCoordinate) input.coordinate = coordinate.trim();
     }
     if (outcome === "no_quiere") input.confirmOrderName = current.orderName;
+    // Al pasar al siguiente la lista se pide de fondo: el guardado no la espera.
+    if (advance && hasNext) input.deferRefresh = true;
     start(async () => {
       const result = await registerReproCall(input)
         .catch((error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }) as RegisterReproCallResult);

@@ -26,6 +26,7 @@
 //   RPC (E30): la recepción ya está hecha y es lo que importa.
 
 import type { createAdminSupabase } from "@/lib/db";
+import { stageClock } from "@/lib/page-load-log";
 import { courierRowsByIds, courierRowsByIdsWide } from "@/lib/courier-flow";
 import { loadActiveBoxes, type CourierRouteAssignment } from "@/lib/gf-active-boxes";
 import {
@@ -362,6 +363,8 @@ function receivedSince(receivedAt: string | null, since: string): boolean {
 }
 
 export interface ReproFactsOptions {
+  /** Dónde dejar el tiempo de cada espera en fila (`c.hechos.*`); solo la pantalla lo pasa. */
+  times?: Record<string, number>;
   /** Filas del Master ya leídas: la lista las trae de su consulta por tienda. */
   orders?: readonly ReproOrderRow[];
   /** Tienda → organización, ya leído. */
@@ -389,6 +392,7 @@ export async function loadReproFacts(
   const out = new Map<string, ReproFacts>();
   if (!ids.length) return out;
   const idSet = new Set(ids);
+  const mark = stageClock(opts.times);
   // Las columnas van en constantes: el tipo de la fila se dice aquí.
   // Lotes anchos (400 ids, 25-11-2026): con 758 pedidos eran 8 lotes por tabla en
   // siete tablas. Cada lectura pide el conteo exacto (`EXACT`): si el servidor
@@ -417,6 +421,7 @@ export async function loadReproFacts(
         .neq("status", "cancelled")),
   ]);
 
+  mark("c.hechos.tablas");
   // Tienda → organización → proveedor.
   const storeIds = [...new Set([
     ...orderRows.map((row) => row.store_id),
@@ -503,6 +508,7 @@ export async function loadReproFacts(
       courierRowsByIds(ownIds, (chunk) => admin.from("logistics_requests").select("shipment_id").in("shipment_id", chunk)),
     ]),
   ]);
+  mark("c.hechos.rutas");
   const urpiLastByOrder = new Map<string, { result_code: string | null; reason: string | null; key: string }>();
   for (const row of urpiRows as Array<{ order_id: string; report_date: string | null; urpi_row: number | null; result_code: string | null; data: { reason?: string | null } | null }>) {
     const key = `${row.report_date ?? ""}#${String(row.urpi_row ?? 0).padStart(9, "0")}`;
@@ -648,6 +654,7 @@ export async function loadReproFacts(
       ),
     });
   }
+  mark("c.hechos.armado");
   return out;
 }
 

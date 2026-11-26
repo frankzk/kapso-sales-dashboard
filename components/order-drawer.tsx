@@ -69,14 +69,7 @@ import { ReproLimaPanel, type ReproNotice, type ReproSaved } from "@/components/
 import { loadReproRow } from "@/app/dashboard/pedidos/repro-lima/actions";
 import type { ReproRow } from "@/lib/repro-lima-access";
 import { isReproLimaCandidate, reproAttendMode } from "@/lib/repro-lima-pending";
-import {
-  clearReproLimaHandoff,
-  handOffReproLima,
-  reproLimaHandoff,
-  reproLimaNext,
-  reproLimaQueueVersion,
-  subscribeReproLimaQueue,
-} from "@/lib/repro-lima-queue";
+import { advanceReproLima, clearReproLimaHandoff, handOffReproLima, reproLimaHandoff, reproLimaNext, reproLimaQueueVersion, subscribeReproLimaQueue } from "@/lib/repro-lima-queue";
 import { DRAWER_PARAM, orderDrawerHref } from "@/lib/order-drawer-href";
 import { reportClientPerformanceMetric } from "@/lib/client-performance";
 import { AliclikDuplicatePanel } from "@/components/aliclik-duplicate-panel";
@@ -1207,6 +1200,10 @@ export function OrderDrawer({
       // la vez que el cambio de URL. Tomar el caso del siguiente y soltar
       // este tampoco la piden desde el 25-11-2026: una lectura por guardado.
       goToNextRepro(saved.orderId, next);
+      // Después del cambio de URL: la ficha se queda en el siguiente aunque la
+      // URL regrese, y si el guardado no trajo la lista, se pide una vez de
+      // fondo (`OrderDrawerHost`).
+      advanceReproLima(saved.orderId, next, !saved.refreshed);
       return;
     }
     if (wantsNext) reportClientPerformanceMetric("repro:next-missing", 0);

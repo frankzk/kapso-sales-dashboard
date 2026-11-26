@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createAdminSupabase } from "@/lib/db";
 import { internalAuthorized } from "@/lib/voice-recovery-server";
 import { loadGfReadyStores } from "@/lib/gf-auto-guide-server";
-import { describeGfCatalogSync, syncGfCatalog } from "@/lib/gf-catalog-sync-server";
+import { describeGfCatalogSync, recordGfCatalogSync, syncGfCatalog } from "@/lib/gf-catalog-sync-server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,7 +20,11 @@ export async function GET(req: NextRequest) {
   const stores = [];
   for (const s of ready.stores) {
     const report = await syncGfCatalog(admin, s.id, { dry });
-    stores.push({ store: s.name, ok: report.ok, summary: describeGfCatalogSync(report) });
+    const summary = describeGfCatalogSync(report);
+    // Queda en sync_state y en el log de Vercel: un fallo (p. ej. sin catalogue:write) ya no pasa en silencio.
+    await recordGfCatalogSync(admin, report);
+    (report.ok ? console.log : console.warn)(`[gf-catalog-sync] ${s.name}${dry ? " (dry)" : ""}: ${summary}`);
+    stores.push({ store: s.name, ok: report.ok, summary });
   }
   return NextResponse.json({ dry, stores });
 }

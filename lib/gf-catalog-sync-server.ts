@@ -3,6 +3,8 @@ import "server-only";
 // Catálogo sincronizado con GF Courier (MOM §29.17, owner 16-11-2026). Lee el catálogo vivo de la tienda y su
 // catálogo en GF, arma el plan (lib/gf-courier-catalog.ts, puro) y lo manda a POST /v1/products/batch en lotes de
 // 200. Corre cada hora (cron gf-catalog-sync) y con «Sincronizar ahora» en Configuración → GF Courier.
+// Cada corrida deja su resultado en `sync_state` (fuente `gf_catalog`): antes no quedaba en ningún lado y una tienda sin
+// catalogue:write pasó semanas sin sincronizar sin que nadie lo viera (owner, 26-11-2026, #KP201969).
 import { createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { gfCourier } from "@/lib/gf-courier";
@@ -79,4 +81,24 @@ export function describeGfCatalogSync(r: GfCatalogSyncReport): string {
     r.repeatedSkus.length ? `SKU repetido en dos variantes: ${r.repeatedSkus.slice(0, 5).join(", ")}.` : "",
   ].filter(Boolean).join(" ");
   return `Catálogo de ${r.storeSkus} SKU sincronizado con GF: ${parts.join(", ")}.${tail ? ` ${tail}` : ""}`;
+}
+
+/** La fuente de `sync_state` donde queda la última sincronización del catálogo con GF. */
+export const GF_CATALOG_SYNC_SOURCE = "gf_catalog";
+
+/**
+ * Deja el resultado en `sync_state` (Configuración → GF Courier y → Sincronización lo muestran): estado, hora y el
+ * resumen (en `cursor` si salió bien, en `error` si no). La simulación (`dry`) no se guarda. Nunca lanza.
+ */
+export async function recordGfCatalogSync(admin: SupabaseClient, report: GfCatalogSyncReport): Promise<void> {
+  if (report.dry) return;
+  const text = describeGfCatalogSync(report);
+  try {
+    await admin.from("sync_state").upsert({
+      store_id: report.storeId, source: GF_CATALOG_SYNC_SOURCE, last_run_at: new Date().toISOString(),
+      status: report.ok ? "ok" : "error", cursor: report.ok ? text.slice(0, 1000) : null, error: report.ok ? null : text.slice(0, 1000),
+    }, { onConflict: "store_id,source" });
+  } catch {
+    // Sin registro, la sincronización igual ocurrió: el resultado sigue en la respuesta del cron o del botón.
+  }
 }

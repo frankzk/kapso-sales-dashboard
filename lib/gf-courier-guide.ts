@@ -13,6 +13,8 @@ import "server-only";
 //   4. La intención se escribe ANTES del POST; su índice único parcial impide dos intentos vivos.
 //   5. Un timeout NO es un fallo: la intención queda 'pending' y el reintento usa la MISMA Idempotency-Key, así que
 //      GF devuelve la misma guía. DUPLICATE_ORDER / IDEMPOTENCY_CONFLICT con tracking_id se ADOPTAN (la guía existe).
+//   6. SKU_NOT_FOUND (owner, 26-11-2026, #KP201969): Kapta sube ese SKU al catálogo de la tienda en GF y reintenta con
+//      la misma clave (GF no guarda un rechazo en su idempotencia). Uno por vuelta, como mucho uno por línea.
 import { otherCourierBlocksGf, otherCourierLabel } from "@/lib/gf-other-courier";
 import { gfBoxBackInWarehouse, gfGhostCancelNote, gfGhostReplacedBy } from "@/lib/gf-ghost-guide";
 import { salidaActiva, type SalidaExistente } from "@/lib/shipment-output";
@@ -22,6 +24,8 @@ import { createAdminSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
 import { decryptOrNull } from "@/lib/crypto";
 import { gfCourier, gfIdempotencyKey, type GfOrder } from "@/lib/gf-courier";
+import { gfSkuNotFound, gfSkuUploadItem } from "@/lib/gf-courier-catalog";
+import { uploadGfSku } from "@/lib/gf-catalog-upload-server";
 import { gfCancelBlockedByRider, gfDateBoxText, liveGfGuides } from "@/lib/gf-courier-status";
 import { buildGfOrderInput, gfGuideConfirmed, gfNotesInSync, gfOrderNote } from "@/lib/gf-courier-order";
 import { isWebPrepaid } from "@/lib/order-paid";
@@ -101,7 +105,8 @@ export async function createGfGuideFor(
   const advance = (payments.data ?? []).reduce((s, p) => s + Number(p.amount ?? 0), 0);
   const sequence = (shipments.data ?? []).length + 1;
   const externalId = `${row.order_name ?? order.data.name}${sequence > 1 ? `-S${sequence}` : ""}`.slice(0, 100);
-  const lines = ((order.data.line_items ?? []) as any[]).map((l) => ({ sku: l.sku ?? null, title: l.title ?? null, quantity: Number(l.quantity), price: Number(l.price) }));
+  const lines = ((order.data.line_items ?? []) as any[]).map((l) => ({ sku: l.sku ?? null, title: l.title ?? null, variantTitle: l.variant_title ?? null,
+    quantity: Number(l.quantity), price: Number(l.price) }));
   const day = scheduledFor ?? (row.dispatch_scheduled_on && row.dispatch_scheduled_on >= new Date().toISOString().slice(0, 10) ? row.dispatch_scheduled_on : null)
     ?? await reproAgreedGfDay(admin, orderId);
   const built = buildGfOrderInput({
@@ -137,7 +142,19 @@ export async function createGfGuideFor(
     intentId = ins.data.id as string;
   }
 
-  const res = await gfCourier.createOrder({ apiToken: store.token }, built.input, key);
+  let res = await gfCourier.createOrder({ apiToken: store.token }, built.input, key);
+  // El SKU que GF no tiene se sube a su catálogo y se reintenta (compuerta 6). Si no se puede subir, el error lo dice.
+  const uploadedSkus: string[] = [];
+  let uploadFailure: string | null = null;
+  for (let turn = 0; turn < built.input.items.length && !res.ok && !res.timedOut; turn++) {
+    const sku = gfSkuNotFound(res.error, built.input.items);
+    if (!sku || uploadedSkus.some((s) => s.toUpperCase() === sku.toUpperCase())) break;
+    const line = lines.find((l) => String(l.sku ?? "").trim().toUpperCase() === sku.toUpperCase()) ?? null;
+    const up = await uploadGfSku(store.token, gfSkuUploadItem(sku, line));
+    if (!up.ok) { uploadFailure = `Kapta intentó subir el SKU ${sku} al catálogo de GF y no pudo: ${up.error}`; break; }
+    uploadedSkus.push(sku);
+    res = await gfCourier.createOrder({ apiToken: store.token }, built.input, key);
+  }
   let gf: GfOrder | null = null, adopted = false;
   if (res.ok) { gf = res.data; adopted = Boolean(res.replayed); }
   else if (res.timedOut) {
@@ -148,9 +165,12 @@ export async function createGfGuideFor(
   }
   if (!gf) {
     const error = res.ok ? { code: "UNKNOWN", message: "GF no devolvió la guía." } : res.error;
+    const uploaded = uploadedSkus.length ? `Kapta subió a GF ${uploadedSkus.length === 1 ? "el SKU" : "los SKU"} ${uploadedSkus.join(", ")}.` : "";
+    const message = [error.message, uploadFailure, uploaded].filter(Boolean).join(" ");
     await admin.from("gf_order_requests").update({ status: "failed", http_status: res.ok ? null : res.status, error_code: error.code,
-      response: res.ok ? res.data : { error }, updated_at: new Date().toISOString() }).eq("id", intentId);
-    return { ok: false, error: error.message, ...(!res.ok && res.error.allowed ? { allowed: res.error.allowed } : {}) };
+      response: res.ok ? res.data : { error, ...(uploadFailure ? { catalog_upload_error: uploadFailure } : {}), ...(uploadedSkus.length ? { catalog_uploaded: uploadedSkus } : {}) },
+      updated_at: new Date().toISOString() }).eq("id", intentId);
+    return { ok: false, error: message, ...(!res.ok && res.error.allowed ? { allowed: res.error.allowed } : {}) };
   }
   await admin.from("gf_order_requests").update({ status: "sent", tracking_id: gf.tracking_id, response: gf, http_status: res.ok ? 201 : 409,
     updated_at: new Date().toISOString() }).eq("id", intentId);
@@ -168,7 +188,9 @@ export async function createGfGuideFor(
     store_id: row.store_id, order_id: orderId, kind: "guide_registered", occurred_at: new Date().toISOString(), actor: ctx.userId,
     source: GF_COURIER, courier: GF_COURIER, guide_code: gf.tracking_id, ...(ctx.reason ? { reason: ctx.reason } : {}),
     payload: { shipping_cost: gf.shipping_cost, estimated_delivery_date: gf.estimated_delivery_date, external_id: externalId, adopted,
-      ...(built.input.scheduled_date ? { scheduled_date: built.input.scheduled_date } : {}) },
+      ...(built.input.scheduled_date ? { scheduled_date: built.input.scheduled_date } : {}),
+      // Los SKU que Kapta subió al catálogo de GF para poder crear esta guía (compuerta 6).
+      ...(uploadedSkus.length ? { gf_catalog_uploaded: uploadedSkus } : {}) },
   });
   await recomputeOrderMasterSafe(admin, [orderId]);
   return { ok: true, trackingId: gf.tracking_id, shippingCost: gf.shipping_cost, estimatedDeliveryDate: gf.estimated_delivery_date, adopted };

@@ -37,7 +37,7 @@ import { gfApiBase, gfCourier } from "@/lib/gf-courier";
 import { loadGfStore } from "@/lib/gf-courier-guide";
 import { compareGfCatalog } from "@/lib/gf-courier-catalog";
 import { loadGfProducts, loadStoreCatalogForGf } from "@/lib/gf-courier-catalog-server";
-import { describeGfCatalogSync, syncGfCatalog } from "@/lib/gf-catalog-sync-server";
+import { describeGfCatalogSync, recordGfCatalogSync, syncGfCatalog } from "@/lib/gf-catalog-sync-server";
 import { listProducts } from "@/lib/aliclik";
 import { loadSkuCatalogSource, syncAliclikCatalog } from "@/lib/aliclik-catalog";
 import { catalogSkusPhrase } from "@/lib/catalog-source";
@@ -608,6 +608,7 @@ export async function syncGfCatalogNow(_prev: SettingsState, formData: FormData)
   const ctx = await requireStoreAdmin(storeId);
   if (!ctx) return { error: "Sin permiso." };
   const report = await syncGfCatalog(ctx.admin, storeId);
+  await recordGfCatalogSync(ctx.admin, report);
   const text = describeGfCatalogSync(report);
   return report.ok ? { notice: text } : { error: text };
 }

@@ -85,6 +85,40 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 25-11-2026 · Repro Lima: «Guardar y pasar al siguiente» pasa en el acto y no vuelve al mismo pedido (sin migración, MOM §9.5)
+
+Sin migración, variables ni crons.
+
+Por qué: la usuaria principal, con video: después de guardar, la ficha quedaba en blanco unos 4,5 s y volvía a abrir
+el mismo pedido, en «Operar». Reproducido en un navegador real: el guardado traía la lista entera y al pasar al
+siguiente el navegador la descartaba y la pedía dos veces más (tres lecturas a la vez); además reponía la dirección
+del pedido guardado cuando llegaba la lectura. Ahora, al pasar al siguiente, el guardado solo guarda, la ficha queda
+fijada al siguiente y la lista se pide una vez, de fondo, a los 2,5 s.
+
+**Cada persona tiene que recargar la página una vez (F5)** para recibir el cambio: las pestañas abiertas siguen con
+la versión anterior.
+
+Verificar con un pedido real de Repro Lima:
+1. «Atender» un pedido, marcar «No contesta» y «Guardar y pasar al siguiente»: se abre el siguiente, en la pestaña
+   «Repro Lima», sin quedarse en blanco.
+2. Unos 3 segundos después, la fila del pedido guardado cambia de lugar en la lista de atrás.
+3. En Vercel → Logs, buscando `[repro-lima] carga`: por cada guardado con paso al siguiente hay una sola línea
+   (un `GET`), no tres (`POST`, `GET`, `GET`).
+4. En el pedido guardado, «Actividad» muestra una sola llamada nueva, no dos.
+
+Marcha atrás: revertir el commit. No toca datos.
+
+### 25-11-2026 · Repro Lima: la línea de carga dice cuánto tarda cada etapa (sin migración)
+
+Sin migración, variables ni crons. No cambia lo que se lee ni lo que se ve: solo se anotan más tiempos.
+
+Por qué: con los lotes anchos Repro Lima bajó de 2,3–3,6 s a 1,6–2,3 s (13 cargas medidas tras el despliegue), menos
+de lo estimado. `casos` y `pendientes` solos no dicen cuál de sus esperas en fila pesa.
+
+Verificar, en Vercel → Logs, buscando `[repro-lima] carga`: la línea trae además `c.etapa`, `c.filtro`, `c.hechos`
+(con `c.hechos.tablas`, `c.hechos.rutas`, `c.hechos.armado`), `c.llamadas`, `p.etapa`, `p.lecturas` (con `p.gf`,
+`p.gf.salidas`, `p.gf.detalle`, `p.gf.cajas`, `p.courier`, `p.gestion`) y `p.gfDias`. Solo milisegundos.
+
 ### 25-11-2026 · Leads: la cola de «Por llamar» se lee en tramos a la vez (sin migración, MOM «La cola de Leads se revisa cada 60 s»)
 
 Sin migración, variables ni crons. Solo cambia cómo lee el servidor; la asesora ve la misma lista en el mismo orden.

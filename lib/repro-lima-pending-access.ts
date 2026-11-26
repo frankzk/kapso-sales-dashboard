@@ -1,4 +1,5 @@
 import type { createAdminSupabase } from "@/lib/db";
+import { stageClock, stageTimed } from "@/lib/page-load-log";
 import type { ReproScope } from "@/lib/repro-lima-access";
 import { allCourierRows, allCourierRowsCounted, COURIER_ROWS_WIDE_BATCH, courierRowsByIds, courierRowsByIdsWide } from "@/lib/courier-flow";
 import { buildRiderSuggestions, parseGfAssigned, RIDER_SHARE_DAYS, shownRiderSuggestion, type GfAssignedRider, type RiderShareRow } from "@/lib/lima-rider-suggest";
@@ -106,7 +107,8 @@ async function ordersInCurrentGfBoxes(admin: Admin, orderIds: ReadonlySet<string
  *   acuerdo o el programa); si el motorizado se la llevó, se dice «por recibir
  *   en oficina».
  */
-async function loadGfPlanFacts(admin: Admin, rows: PendingMasterRow[], storeOrg: ReadonlyMap<string, string>, today: string): Promise<{ gf: Map<string, LimaPendingGf>; ops: Map<string, LimaPendingOps>; history: Map<string, string[]> }> {
+async function loadGfPlanFacts(admin: Admin, rows: PendingMasterRow[], storeOrg: ReadonlyMap<string, string>, today: string, times?: Record<string, number>): Promise<{ gf: Map<string, LimaPendingGf>; ops: Map<string, LimaPendingOps>; history: Map<string, string[]> }> {
+  const mark = stageClock(times);
   const orgIds = [...new Set(storeOrg.values())];
   const out = new Map<string, LimaPendingGf>();
   const ops = new Map<string, LimaPendingOps>();
@@ -133,6 +135,7 @@ async function loadGfPlanFacts(admin: Admin, rows: PendingMasterRow[], storeOrg:
     courierRowsByIdsWide<GfShipmentRow>(orderIds, (chunk) => admin.from("shipments")
       .select(GF_SHIPMENT_COLUMNS, EXACT).in("order_id", chunk) as unknown as Counted<GfShipmentRow>),
   ]);
+  mark("p.gf.salidas");
   const candidates = rows.filter((r) => r.macro_stage === "preparacion" || r.macro_stage === "por_despachar" || isRetry(r) || boxed.has(r.order_id));
   // Sin candidatos, el proveedor no cuenta (como cuando no se leía): ni convenio, ni tarifas, ni pausas.
   const providers = { data: candidates.length ? providerRows.data : [] };
@@ -176,6 +179,7 @@ async function loadGfPlanFacts(admin: Admin, rows: PendingMasterRow[], storeOrg:
       .order("id").range(from, to) as unknown as Read<GuideOrigin>).then((data) => ({ data, error: null })), COURIER_ROWS_WIDE_BATCH),
     loadLimaReportedHistory(admin, historyIds),
   ]);
+  mark("p.gf.detalle");
   // Manda el último registro de ESA guía. Una creación manual posterior no
   // hereda el origen automático de una anterior con el mismo código.
   const latestOrigins = new Map<string, { at: number; automatic: boolean }>();
@@ -193,6 +197,7 @@ async function loadGfPlanFacts(admin: Admin, rows: PendingMasterRow[], storeOrg:
   const tariffRows = tariffs.map((t) => ({ ...t, delivery_amount: Number(t.delivery_amount), rejection_amount: Number(t.rejection_amount) }));
   const manifests = await courierRowsByIdsWide<GfManifestRow>([...new Set(items.data.map((i) => i.manifest_id))], (chunk) => admin.from("dispatch_manifests")
     .select("id,route_date,driver_name,courier,kind,state", EXACT).in("id", chunk) as unknown as Counted<GfManifestRow>);
+  mark("p.gf.cajas");
   const gfManifest = new Map(manifests.data.filter(isGfReparto).map((m) => [m.id, m]));
   type Box = NonNullable<LimaPendingGf["box"]> & { current: boolean; withRider: boolean };
   const boxByShipment = new Map<string, Box>();
@@ -496,7 +501,9 @@ async function inBatchesOf500<T>(ids: readonly string[], read: (batch: string[])
 
 /** Solo lectura, después de requireReproLima. Pagina todos los pedidos, sin
  * truncarlos a 1000 y sin cargar expedientes completos por cada fila. */
-export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date = new Date()): Promise<LimaPendingOrder[]> {
+export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date = new Date(), times?: Record<string, number>): Promise<LimaPendingOrder[]> {
+  // Con `times` (la pantalla) cada espera en fila deja su tiempo: `p.etapa`, `p.lecturas`, `p.gfDias`.
+  const mark = stageClock(times);
   const ids = [...scope.storeIds];
   if (!ids.length) return [];
   const [orders, stores, programs] = await Promise.all([
@@ -510,6 +517,7 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
     allCourierRows<PendingProgramRow>((from, to) => admin.from("gf_dispatch_programs")
       .select("order_id,store_id,scheduled_for").in("store_id", ids).order("order_id").range(from, to) as unknown as PromiseLike<{ data: PendingProgramRow[] | null; error: { message: string } | null }>),
   ]);
+  mark("p.etapa");
   const storeRows = stores.data as Array<{ id: string; name: string; org_id?: string | null }>;
   const names = new Map(storeRows.map((s) => [s.id, s.name]));
   const storeOrg = new Map(storeRows.filter((s) => s.org_id).map((s) => [s.id, s.org_id as string]));
@@ -529,11 +537,11 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
   // del courier y la gestión, en vez de esperar a que terminen. Sus lotes de
   // 500 también van a la vez.
   const [{ gf: gfFacts, ops: stuckFacts, history }, courierDetails, riderSuggestions, management, departureRows, pickupRows] = await Promise.all([
-    loadGfPlanFacts(admin, safe, storeOrg, limaClock(now).day),
-    loadCourierDetails(admin, safe),
+    stageTimed(times, "p.gf", loadGfPlanFacts(admin, safe, storeOrg, limaClock(now).day, times)),
+    stageTimed(times, "p.courier", loadCourierDetails(admin, safe)),
     // Best-effort (17-11-2026): sin la lectura, la fila no sugiere motorizado.
     loadRiderSuggestions(admin).catch(() => new Map<string, string[]>()),
-    loadLimaManagement(admin, safeIds, new Map(safe.map((row) => [row.order_id, row.order_created_at]))),
+    stageTimed(times, "p.gestion", loadLimaManagement(admin, safeIds, new Map(safe.map((row) => [row.order_id, row.order_created_at])))),
     // La misma fuente de Grupo GF, en lotes de 500: una respuesta jamás puede
     // quedar truncada en 1000 y convertir salidas reales en «Nunca salieron».
     inBatchesOf500(safeIds, async (batch) => {
@@ -557,6 +565,7 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
       return (data ?? []) as PendingPickupRow[];
     }),
   ]);
+  mark("p.lecturas");
   for (const d of departureRows) {
     if (orderStore.has(d.order_id) && d.last_departure_at) departures.set(d.order_id, d.last_departure_at);
   }
@@ -605,6 +614,7 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
   const neverLeftGuides = new Map<string, NeverLeftGuide[]>();
   for (const g of neverLeftRows) neverLeftGuides.set(g.order_id, [...(neverLeftGuides.get(g.order_id) ?? []), g]);
   const neverLeft = new Set(neverLeftCandidates.filter((id) => limaBoxNeverLeft(neverLeftGuides.get(id) ?? [])));
+  mark("p.gfDias");
   return safe.map((row) => {
     // El filtro de arriba valida también la macroetapa de cada fila.
     const stage = row.macro_stage as LimaPendingOrder["stage"];

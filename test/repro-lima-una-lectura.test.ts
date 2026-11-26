@@ -128,7 +128,8 @@ describe("una lectura por guardado", () => {
     expect(done).toBeGreaterThan(-1);
     expect(record.match(/callId: recorded\.call_id,/g)?.length).toBe(2);
     expect(record.lastIndexOf("callId: recorded.call_id,")).toBeGreaterThan(done);
-    expect(panel).toContain("refreshed: Boolean(result.callId),");
+    // Salvo al pasar al siguiente (25-11-2026): ahí la acción no la trae y la ficha la pide de fondo.
+    expect(panel).toContain("refreshed: Boolean(result.callId) && !result.refreshDeferred,");
     const onSaved = drawer.slice(drawer.indexOf("function onReproSaved(saved: ReproSaved, advance: boolean) {"));
     expect(onSaved.slice(0, onSaved.indexOf("\n  }\n"))).toContain("if (!saved.refreshed) onSaved();");
   });

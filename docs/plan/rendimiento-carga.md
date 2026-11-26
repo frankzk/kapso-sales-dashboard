@@ -342,9 +342,13 @@ salidas, con 1,25 por pedido (unas 500 filas por tanda de 400), lejos del tope
 de 1.000 filas por respuesta. Por si un día no lo está, cada tanda pide el
 conteo exacto y se parte sola cuando el servidor la corta.
 
-**Cuánto mejora.** Estimado, no medido: el tiempo debería bajar en proporción
-a las consultas. Se confirma con la línea `[repro-lima] carga` después de
-desplegar.
+**Cuánto mejoró, medido.** 13 cargas en los primeros minutos tras desplegar
+(hora de almuerzo, poca gente): de 1,6 a 2,3 s, mediana cerca de 1,9 s, contra
+2,3 a 3,6 s de antes. Cerca de un tercio menos; no la proporción de las
+consultas que se estimó. Ninguna consulta suelta es lenta (la de la etapa
+tarda 9 ms en la base), así que lo que queda son las esperas en fila. Para
+saber cuál, la línea `[repro-lima] carga` anota desde entonces cada etapa
+(`c.*` para casos, `p.*` para pendientes).
 
 Queda para después: que las dos lecturas de la pantalla (casos y pendientes)
 compartan lo que hoy leen por separado (las salidas se leen cuatro veces), y
