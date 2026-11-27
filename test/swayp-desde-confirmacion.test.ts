@@ -303,7 +303,8 @@ describe("el botón", () => {
     });
     // La ficha y Leads (MOM §25.2) preguntan a la misma función, con la misma pieza.
     const drawer = read("components/order-drawer.tsx");
-    expect(drawer).toContain("{swaypDesdeConfirmacionOffer(detail.row).offered && (");
+    // Un pedido nuevo con stock completo lo muestra arriba, como primera opción (§11.14).
+    expect(drawer).toContain("{!detail.routePlan.swaypFirst && swaypDesdeConfirmacionOffer(detail.row).offered && (");
     expect(drawer).toContain('import { EnviarPorSwaypDesdeConfirmacion } from "@/components/swayp-desde-confirmacion-offer";');
     expect(drawer).not.toContain("function EnviarPorSwaypDesdeConfirmacion(");
   });

@@ -64,6 +64,7 @@ import {
 } from "@/lib/order-confirmation";
 import { evaluateDirectFenixStock, type FenixStockRow } from "@/lib/fenix";
 import { deriveFenixCoverageCity } from "@/lib/shipments";
+import { swaypPrimero } from "@/lib/swayp-desde-confirmacion-offer";
 import {
   buildOrderRoutePlan,
   routeDeskGate,
@@ -1410,6 +1411,8 @@ export async function getOrderMasterDetail(
       operation: operationOf(row, guides),
       paymentState: row.payment_state,
       swayp,
+      // MOM §11.14: pedido nuevo con stock completo en Swayp → Swayp primero.
+      swaypFirst: swaypPrimero({ row, outputs: guides.length, swayp, now: new Date() }),
       grupoGfCourier,
       gfCourier,
       outputs: guides.map((guide) => ({

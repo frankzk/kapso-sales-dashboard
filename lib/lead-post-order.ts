@@ -48,6 +48,8 @@ export interface LeadPostOrderInput {
     operation: OperationKind;
     operationLabel: string;
     candidates: readonly Pick<RouteCandidate, "key" | "action" | "availability" | "reason">[];
+    /** Pedido nuevo con stock completo en Swayp (MOM §11.14): Swayp va primero. */
+    swaypFirst?: boolean;
   };
   /** El pedido viaja en la guía de otro (MOM §32). */
   travelsInCompanion: boolean;
@@ -84,6 +86,8 @@ export interface LeadPostOrderChoices {
     reason: string | null;
     /** Guías Swayp vivas: ya está programado. */
     guides: string[];
+    /** Pedido nuevo con stock completo en Swayp (MOM §11.14): es la primera opción. */
+    first: boolean;
   };
   agencia: {
     offered: boolean;
@@ -143,7 +147,9 @@ export function leadPostOrderChoices(input: LeadPostOrderInput): LeadPostOrderCh
   let swaypReason: string | null = null;
   if (!swaypGuides.length) {
     if (!perms.canEdit) swaypReason = LEAD_POST_ORDER_REASON.swaypPermission;
-    else {
+    // Con stock completo leído en la ficha (§11.14) se ofrece aunque la pasada
+    // horaria todavía no haya evaluado el pedido recién creado.
+    else if (!routePlan.swaypFirst) {
       const offer = swaypDesdeConfirmacionOffer({
         ...row,
         swayp_availability: row.swayp_availability ?? input.swaypAvailabilityNow ?? null,
@@ -176,7 +182,12 @@ export function leadPostOrderChoices(input: LeadPostOrderInput): LeadPostOrderCh
     orderId: input.orderId,
     orderName: input.orderName,
     aliclik: { offered: !aliclikGuide && !aliclikReason, reason: aliclikReason, guide: aliclikGuide },
-    swayp: { offered: !swaypGuides.length && !swaypReason, reason: swaypReason, guides: swaypGuides },
+    swayp: {
+      offered: !swaypGuides.length && !swaypReason,
+      reason: swaypReason,
+      guides: swaypGuides,
+      first: !!routePlan.swaypFirst && !swaypGuides.length && !swaypReason,
+    },
     agencia: {
       offered: agencyOffered,
       reason: agencyReason,
@@ -191,14 +202,16 @@ export function leadPostOrderChoices(input: LeadPostOrderInput): LeadPostOrderCh
 
 /**
  * La opción que se abre sola: la que ya tiene algo hecho (una guía Swayp, la de
- * Aliclik, un cobro o una agencia guardada) y, si no, Aliclik cuando se ofrece —
- * es lo que el cajón enseñaba antes, abierto, después de «Generar pedido». Si no
- * hay ninguna, ninguna: la asesora elige.
+ * Aliclik, un cobro o una agencia guardada); si no, Swayp en un pedido nuevo con
+ * stock completo (MOM §11.14), y si no, Aliclik cuando se ofrece —es lo que el
+ * cajón enseñaba antes, abierto, después de «Generar pedido». Si no hay
+ * ninguna, ninguna: la asesora elige.
  */
 export function defaultLeadPostOrderChoice(choices: LeadPostOrderChoices): LeadPostOrderChoiceKey | null {
   if (choices.swayp.guides.length) return "swayp";
   if (choices.aliclik.guide) return "aliclik";
   if (choices.agencia.offered && (choices.agencia.payment || choices.agencia.shalom)) return "agencia";
+  if (choices.swayp.first) return "swayp";
   if (choices.aliclik.offered) return "aliclik";
   return null;
 }
