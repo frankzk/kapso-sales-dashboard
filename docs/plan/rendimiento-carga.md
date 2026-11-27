@@ -385,6 +385,25 @@ tope no salen en «Por llamar». Eran unos 7.000 el 02-10-2026 y son 12.513 el
 25-11-2026. Si sigue creciendo así, se alcanza en unos dos o tres meses
 (estimado). El cambio 2 de la fase 2 lo resuelve de raíz.
 
+### Medido el 26-11-2026, con todo en producción
+
+| Pantalla | Antes (25-11) | Después (26-11, tarde y noche) |
+|---|---|---|
+| Leads | 2,9 a 9,8 s | 1,5 a 2,2 s; una de cada tres, 4,6 a 6,3 s por `productos` |
+| Repro Lima | 2,3 a 3,6 s (5 a 8,7 s en picos) | 1,5 a 2,1 s; 3 a 4,2 s cuando cargan varias a la vez |
+
+- **Leads.** `lista` bajó a 1,1–1,8 s. Lo que quedaba eran las cargas que
+  coincidían con la renovación del catálogo de productos (cada 5 minutos, 3 a
+  4,5 s desde WooCommerce). Desde el 27-11 el tablero no la espera.
+- **Repro Lima.** Las dos lecturas van a la par y tardan parecido. En
+  `pendientes` manda `p.gestion` (1,0–1,7 s, saber si ya se llamó a cada
+  clienta, en dos esperas) y `p.gf` (salidas → detalle → cajas, en fila). En
+  `casos`, `c.hechos.tablas` (0,4–0,9 s) y `c.hechos.rutas`. Ninguna consulta es
+  lenta en la base: son esperas en fila de varias consultas.
+- **«Guardar y pasar al siguiente».** Dos usos registrados la tarde del 26-11;
+  en uno la dirección intentó volver al pedido guardado y la guarda la
+  corrigió (`repro:next-reverted`). No hubo queja nueva.
+
 ### Siguiente paso propuesto
 
 1. Medir un día con lo que ya está en producción (desde el 25-11-2026).

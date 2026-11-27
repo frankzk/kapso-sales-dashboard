@@ -85,6 +85,20 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 27-11-2026 · Leads: el producto de cada lead se reconoce sin esperar al catálogo que se renueva (sin migración)
+
+Sin migración, variables ni crons. Solo cambia cuándo se espera el catálogo de productos al pintar el tablero.
+
+Por qué: medido el 26-11 con `[leads] carga`, la mayoría de las cargas ya tardaba 1,5–2,2 s, pero una de cada tres
+tardaba 4,6–6,3 s, siempre por `productos` (3–4,5 s): cada 5 minutos el catálogo se vuelve a pedir a WooCommerce y la
+carga que coincidía lo esperaba. Ahora el tablero usa la última copia completa (hasta 30 minutos) y la nueva se lee
+por detrás. Lo que guarda el producto de un lead sigue esperando el catálogo vigente.
+
+Verificar, en Vercel → Logs, buscando `[leads] carga`: `productos` queda por debajo de ~400 ms salvo en la primera
+carga de cada servidor; ya no hay cargas de ~5 s cada pocos minutos.
+
+Marcha atrás: revertir el commit. No toca datos.
+
 ### 25-11-2026 · Repro Lima: «Guardar y pasar al siguiente» pasa en el acto y no vuelve al mismo pedido (sin migración, MOM §9.5)
 
 Sin migración, variables ni crons.
