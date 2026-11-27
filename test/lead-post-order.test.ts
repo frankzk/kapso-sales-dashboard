@@ -75,7 +75,7 @@ describe("las tres opciones, con las reglas de la ficha", () => {
   it("provincia COD recién creada, Swayp ok: se ofrecen las tres", () => {
     const c = leadPostOrderChoices(input());
     expect(c.aliclik).toEqual({ offered: true, reason: null, guide: null });
-    expect(c.swayp).toEqual({ offered: true, reason: null, guides: [] });
+    expect(c.swayp).toEqual({ offered: true, reason: null, guides: [], first: false });
     expect(c.agencia).toMatchObject({ offered: true, reason: null, mode: "optional", payment: null, shalom: null });
     // Aliclik sigue abierta por defecto, como antes de esta tarjeta.
     expect(defaultLeadPostOrderChoice(c)).toBe("aliclik");
@@ -216,7 +216,7 @@ describe("después de una acción, la opción dice en qué quedó", () => {
         { current_courier: "fenix", guide_code: "50000166047", macro_stage: "en_curso" },
       ),
     );
-    expect(c.swayp).toEqual({ offered: false, reason: null, guides: ["50000166047"] });
+    expect(c.swayp).toEqual({ offered: false, reason: null, guides: ["50000166047"], first: false });
     expect(c.aliclik).toMatchObject({ offered: false, guide: null, reason: "El pedido ya tiene una guía de Swayp." });
     expect(defaultLeadPostOrderChoice(c)).toBe("swayp");
   });

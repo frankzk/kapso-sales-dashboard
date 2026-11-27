@@ -338,7 +338,9 @@ export function OrderRouteDesk({
               : actionEnabled(route)
                 ? route.key === "propio"
                   ? "Ver en Grupo GF"
-                  : ACTION_LABEL[route.action]
+                  : route.action === "swayp" && plan.swaypFirst
+                    ? "Enviar por Swayp"
+                    : ACTION_LABEL[route.action]
                 : "Sin permiso"}
           </OpsButton>
         )}

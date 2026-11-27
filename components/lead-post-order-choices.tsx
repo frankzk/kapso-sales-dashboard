@@ -164,6 +164,55 @@ export function LeadPostOrderChoices({
         ? { orderId: targetOrderId, orderName: history.currentOrderName, guide: history.currentOrderGuide }
         : null;
 
+  // Las tarjetas de Aliclik y de Swayp, una vez cada una: en un pedido nuevo con
+  // stock completo en Swayp va primero Swayp (MOM §11.14).
+  const aliclikTile = aliclik && (
+    <OptionTile
+      key="aliclik"
+      label="Guía Aliclik"
+      active={active === "aliclik"}
+      disabled={!aliclik.offered && !aliclik.guide}
+      badge={aliclik.guide ? <Badge tone="ok">Creada</Badge> : undefined}
+      description={
+        aliclik.guide ? (
+          <span className="break-all font-mono">{aliclik.guide}</span>
+        ) : aliclik.offered ? (
+          "Contra entrega por Aliclik: cotiza y crea la guía."
+        ) : (
+          why(aliclik.reason)
+        )
+      }
+      onClick={() => choose("aliclik")}
+    />
+  );
+  const swaypTile = swayp && (
+    <OptionTile
+      key="swayp"
+      label="Swayp hoy"
+      active={active === "swayp"}
+      disabled={!swayp.offered && !swayp.guides.length}
+      badge={
+        swayp.guides.length ? (
+          <Badge tone="ok">Programado</Badge>
+        ) : swayp.offered ? (
+          <Badge>Sin confirmar</Badge>
+        ) : undefined
+      }
+      description={
+        swayp.guides.length ? (
+          <span className="break-all font-mono">{swayp.guides.join(", ")}</span>
+        ) : swayp.first ? (
+          "Pedido nuevo con stock completo: va primero. Sale sin confirmar; si no lo entrega, vuelve a Por confirmar."
+        ) : swayp.offered ? (
+          "Sale sin confirmar; si no lo entrega, vuelve a Por confirmar."
+        ) : (
+          why(swayp.reason)
+        )
+      }
+      onClick={() => choose("swayp")}
+    />
+  );
+
   return (
     <>
       {/* `@container`: las tarjetas-opción miran el ancho de ESTA tarjeta, no el
@@ -190,44 +239,9 @@ export function LeadPostOrderChoices({
             desde ahí. */}
         {choices && aliclik && swayp && agencia && (
           <div role="group" aria-label="Por dónde sale el pedido" className={cn("mt-4", OPTION_GRID)}>
-            <OptionTile
-              label="Guía Aliclik"
-              active={active === "aliclik"}
-              disabled={!aliclik.offered && !aliclik.guide}
-              badge={aliclik.guide ? <Badge tone="ok">Creada</Badge> : undefined}
-              description={
-                aliclik.guide ? (
-                  <span className="break-all font-mono">{aliclik.guide}</span>
-                ) : aliclik.offered ? (
-                  "Contra entrega por Aliclik: cotiza y crea la guía."
-                ) : (
-                  why(aliclik.reason)
-                )
-              }
-              onClick={() => choose("aliclik")}
-            />
-            <OptionTile
-              label="Swayp hoy"
-              active={active === "swayp"}
-              disabled={!swayp.offered && !swayp.guides.length}
-              badge={
-                swayp.guides.length ? (
-                  <Badge tone="ok">Programado</Badge>
-                ) : swayp.offered ? (
-                  <Badge>Sin confirmar</Badge>
-                ) : undefined
-              }
-              description={
-                swayp.guides.length ? (
-                  <span className="break-all font-mono">{swayp.guides.join(", ")}</span>
-                ) : swayp.offered ? (
-                  "Sale sin confirmar; si no lo entrega, vuelve a Por confirmar."
-                ) : (
-                  why(swayp.reason)
-                )
-              }
-              onClick={() => choose("swayp")}
-            />
+            {/* MOM §11.14: en un pedido nuevo con stock completo, Swayp va
+                primero. */}
+            {swayp.first ? [swaypTile, aliclikTile] : [aliclikTile, swaypTile]}
             <OptionTile
               label="Agencia Shalom + adelanto"
               active={active === "agencia"}

@@ -143,6 +143,11 @@ export interface OrderRoutePlan {
   maxOutputs: number;
   warnings: string[];
   candidates: RouteCandidate[];
+  /**
+   * Pedido nuevo con stock completo en Swayp (MOM §11.14): Swayp va primero y
+   * sugerido, y su tarjeta abre «Enviar por Swayp» desde Por confirmar.
+   */
+  swaypFirst?: boolean;
 }
 
 /**
@@ -167,6 +172,8 @@ export interface OrderRoutePlanInput {
   grupoGfCourier?: GroupGfCourierRouteCheck | null;
   gfCourier?: GfCourierRouteCheck | null;
   now?: Date;
+  /** `swaypPrimero` (lib/swayp-desde-confirmacion-offer.ts), calculado con el pedido. */
+  swaypFirst?: boolean;
 }
 
 export interface RouteDeskBlocker {
@@ -656,12 +663,20 @@ function swaypCandidate(input: OrderRoutePlanInput, recommended: boolean): Route
   };
 }
 
+/** Pedido nuevo con stock completo en Swayp (MOM §11.14): la tarjeta de Swayp. */
+export const SWAYP_PRIMERO_ROUTE_REASON = (city: string): string =>
+  `Pedido nuevo con stock completo en ${city}: sale sin confirmar y, si Swayp no lo entrega, vuelve a Por confirmar.`;
+/** La de Aliclik: deja de ser la sugerencia, no se bloquea (owner, 27-11-2026). */
+export const SWAYP_PRIMERO_ALICLIK_REASON =
+  "Pedido nuevo con stock completo en Swayp: la sugerencia es Swayp. Aliclik se puede elegir igual, y es la ruta si Swayp no lo entrega.";
+
 /**
  * Decisión operativa de Fase 3. No crea guías: ordena y explica las opciones
  * que luego ejecutan los paneles especializados o la salida manual con QR.
  */
 export function buildOrderRoutePlan(input: OrderRoutePlanInput): OrderRoutePlan {
   const operation = input.operation;
+  const swaypFirst = !!input.swaypFirst && operation === "provincia_cod";
   // Activas con la definición única (`salidaActiva`, owner 23-11-2026); las «por definir» se cuentan aparte (abajo).
   const active = input.outputs.filter((o) => isActiveForOther(o) || (isActive(o) && isFillableSnapshot(o)));
   // Una salida «por definir» no cuenta como salida que estorba: crear la guía
@@ -769,17 +784,28 @@ export function buildOrderRoutePlan(input: OrderRoutePlanInput): OrderRoutePlan 
       ),
     ];
   } else {
-    const swayp = swaypCandidate(input, hasFailedAliclik);
-    routes = [
-      candidate(
-        "aliclik",
-        "Ruta interprovincial",
-        hasFailedAliclik
-          ? "Ya existe una salida Aliclik fallida; prioriza Reproprovincia si hay stock."
+    // Pedido nuevo con stock completo en Swayp (MOM §11.14, 27-11-2026): Swayp
+    // primero y sugerido; Aliclik deja de ser la sugerencia, sin bloquearse.
+    // Solo si la tarjeta de Swayp de verdad está disponible: si no, Aliclik
+    // sigue siendo la sugerencia y nada dice «la sugerencia es Swayp».
+    const swaypIfFirst = swaypFirst && !hasFailedAliclik ? swaypCandidate(input, true) : null;
+    const first = swaypIfFirst?.availability === "available";
+    const swayp =
+      first && swaypIfFirst
+        ? { ...swaypIfFirst, reason: SWAYP_PRIMERO_ROUTE_REASON(input.swayp?.city || "la ciudad de destino") }
+        : swaypCandidate(input, hasFailedAliclik);
+    const aliclik = candidate(
+      "aliclik",
+      "Ruta interprovincial",
+      hasFailedAliclik
+        ? "Ya existe una salida Aliclik fallida; prioriza Reproprovincia si hay stock."
+        : first
+          ? SWAYP_PRIMERO_ALICLIK_REASON
           : "Primera ruta sugerida para Provincia COD.",
-        { recommended: !hasFailedAliclik },
-      ),
-      swayp,
+      { recommended: !hasFailedAliclik && !first },
+    );
+    routes = [
+      ...(first ? [swayp, aliclik] : [aliclik, swayp]),
       withAgencyPaymentGate(
         candidate("shalom", "Recojo en agencia", "Tercera ruta: requiere adelanto validado."),
         input.paymentState,
@@ -815,6 +841,9 @@ export function buildOrderRoutePlan(input: OrderRoutePlanInput): OrderRoutePlan 
     maxOutputs: MAX_OUTPUTS_PER_ORDER,
     warnings,
     candidates: routes,
+    swaypFirst:
+      swaypFirst &&
+      routes.some((route) => route.key === "swayp" && route.recommended && route.availability !== "blocked"),
   };
 }
 

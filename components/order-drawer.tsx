@@ -1329,7 +1329,9 @@ export function OrderDrawer({
       return;
     }
     if (route.action === "swayp") {
-      setSwaypOrigen(undefined);
+      // MOM §11.14: en un pedido nuevo con stock completo, la tarjeta de Swayp
+      // es «Enviar por Swayp» desde Por confirmar (si no entrega, vuelve).
+      setSwaypOrigen(detail?.routePlan.swaypFirst ? "por_confirmar" : undefined);
       setSwaypOpen(true);
       return;
     }
@@ -2019,6 +2021,19 @@ export function OrderDrawer({
                   data-drawer-section="confirmacion"
                   className={cn("order-3", SECTION)}
                 >
+                  {/* MOM §11.14: pedido nuevo con stock completo en Swayp. La
+                      primera opción es enviarlo por Swayp, antes de llamar. */}
+                  {detail.routePlan.swaypFirst && (
+                    <EnviarPorSwaypDesdeConfirmacion
+                      first
+                      className="mb-4"
+                      pending={pending}
+                      onOpen={() => {
+                        setSwaypOrigen("por_confirmar");
+                        setSwaypOpen(true);
+                      }}
+                    />
+                  )}
                   <ConfirmationDesk
                     brief={brief}
                     onDuplicateChanged={() => { void reload(); onSaved(); }}
@@ -2035,7 +2050,7 @@ export function OrderDrawer({
                   {/* MOM §11.11: provincia COD que Swayp puede llevar hoy sale sin
                       confirmar; si Swayp no entrega, vuelve aquí. No se ofrece en
                       «Swayp no entregó»: ese pedido se llama para salir por otra vía. */}
-                  {swaypDesdeConfirmacionOffer(detail.row).offered && (
+                  {!detail.routePlan.swaypFirst && swaypDesdeConfirmacionOffer(detail.row).offered && (
                       <EnviarPorSwaypDesdeConfirmacion
                         pending={pending}
                         onOpen={() => {
