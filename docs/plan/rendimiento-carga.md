@@ -404,6 +404,33 @@ tope no salen en «Por llamar». Eran unos 7.000 el 02-10-2026 y son 12.513 el
   en uno la dirección intentó volver al pedido guardado y la guarda la
   corrigió (`repro:next-reverted`). No hubo queja nueva.
 
+### Leads: dejar de bajar la cola entera al navegador (aprobado el 27-11-2026)
+
+Medido el 27-11-2026:
+- «Por llamar» manda al navegador ~6.700 leads por tienda con 47 datos cada
+  uno: ~11 MB sin comprimir en cada carga y en cada recarga (13.232 leads y
+  ~23 MB en «Todas»). Ningún dato pesa más del 11 %: recortar columnas
+  ahorraría poco.
+- De esos 13.232, 7.202 están de verdad por llamar. 4.554 llevan más de 30
+  días sin moverse y casi ninguno (8) está en la cola de llamadas.
+- El navegador usa la cola entera para todo lo que el MOM fija: los filtros y
+  sus conteos (once a la vez), el orden «Lo que más cierra», la lista del día,
+  el «Siguiente lead» con reparto por tienda, la exportación de audiencia y las
+  cuentas que cambian cada minuto (Ventana, Edad, hora de oro).
+
+Por etapas, cada una sale sola y se mide:
+1. **Medir y avisar (27-11).** `leads:board-data` dice cuánto pesa y cuánto
+   espera la asesora; el tope de 20.000 se avisa en la pantalla.
+2. **La misma lógica, menos datos.** El navegador sigue filtrando y contando,
+   pero recibe solo lo que usa para eso; lo que solo se ve al mirar una fila
+   (resumen del carrito, contexto, dirección, enlaces) llega con las filas que
+   se ven. Sin cambiar ninguna regla. Ahorro estimado: un tercio.
+3. **Filtros y conteos en el servidor.** El navegador recibe solo las filas que
+   se ven y los conteos. Es lo que de verdad saca el peso y quita el tope, pero
+   cambia cómo se siente la pantalla y necesita decisiones del owner: cada
+   filtro tarda lo que una consulta (~0,3–0,5 s) en vez de ser instantáneo;
+   Ventana, Edad y la hora de oro se recalculan al pedirlas, no cada minuto.
+
 ### Siguiente paso propuesto
 
 1. Medir un día con lo que ya está en producción (desde el 25-11-2026).

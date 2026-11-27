@@ -127,7 +127,7 @@ import { Sheet } from "@/components/filter-sheet";
 import { NextLeadCard, SegmentBadge, useNextLead } from "@/components/leads-next";
 import { VentaTelefonica } from "@/components/venta-telefonica";
 import type { LeadDrawerProps, LeadDrawerUpdate } from "@/components/leads-drawer";
-import { reportClientPerformanceMetric } from "@/lib/client-performance";
+import { reportClientPerformanceMetric, reportLeadsBoardData } from "@/lib/client-performance";
 
 const LeadsInsightsPanel = dynamic(
   () => import("@/components/leads-insights").then((module) => module.LeadsInsightsPanel),
@@ -521,6 +521,7 @@ export function LeadsBoard({
   canHoldNext = false,
   routingLabel,
   socialPending = 0,
+  queueCapped = false,
 }: {
   stores: StoreSummary[];
   /** Id de la tienda activa, o ALL_STORES cuando la vista es combinada. */
@@ -569,8 +570,14 @@ export function LeadsBoard({
   /** Comentarios y mensajes de Facebook e Instagram por responder (Leads → Redes, MOM §25.4). */
   socialPending?: number;
   routingLabel?: string;
+  /** La lectura llegó al tope de 20.000 filas: faltan leads en la lista y en los conteos (27-11-2026). */
+  queueCapped?: boolean;
 }) {
   const [board, setBoard] = useState({ sourceLeads: serverLeads, sourceCounts: serverCounts, leads: serverLeads, counts: serverCounts });
+  // Cada vez que llega la cola del servidor: cuánto se esperó y cuánto pesa (27-11-2026).
+  useEffect(() => {
+    reportLeadsBoardData(serverLeads.length);
+  }, [serverLeads]);
   // A route/periodic refresh replaces the local confirmed writes atomically.
   if (board.sourceLeads !== serverLeads || board.sourceCounts !== serverCounts) {
     setBoard({ sourceLeads: serverLeads, sourceCounts: serverCounts, leads: serverLeads, counts: serverCounts });
@@ -1714,6 +1721,11 @@ export function LeadsBoard({
         <div className="min-w-0">
           <h1 className="text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">Leads</h1>
           {routingLabel && <p className="mt-1 text-sm font-medium text-brand-700">Tu cola: {routingLabel} · incluye tus reservas y citas</p>}
+          {queueCapped && (
+            <p role="status" className="mt-1 text-sm font-medium text-amber-800">
+              Esta vista pasó de 20.000 leads: algunos no aparecen en la lista ni en los conteos.
+            </p>
+          )}
           <p className="mt-0.5 text-sm text-ink-500">
             {storeLabel}
             {" · "}

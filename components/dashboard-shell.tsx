@@ -7,7 +7,7 @@ import { YapeAlerts } from "@/components/yape-alerts";
 import { CallbackReturnAlerts } from "@/components/callback-return-alerts";
 import { CollectionAlerts } from "@/components/collection-alerts";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
-import { finishPanelNavigation } from "@/lib/client-performance";
+import { finishPanelNavigation, watchLeadsPayloads } from "@/lib/client-performance";
 
 function pathOf(href: string | null): string | null {
   return href?.split("?", 1)[0] ?? null;
@@ -47,6 +47,12 @@ export function DashboardShell({
     finishPanelNavigation(pathname);
     setPendingHref(null);
   }, [pathname]);
+
+  // Lo que pesa y tarda la cola de Leads (27-11-2026): desde el primer montaje,
+  // para anotar también la respuesta que trae Leads al entrar desde otra pantalla.
+  useEffect(() => {
+    watchLeadsPayloads();
+  }, []);
 
   useEffect(() => {
     if (!pendingHref) return;

@@ -9,6 +9,9 @@ export const CLIENT_PERFORMANCE_METRIC_NAMES = [
   "repro:next",
   "repro:next-missing",
   "repro:next-reverted",
+  // La cola de Leads llegó y se ve (27-11-2026): cuánto se esperó desde que se
+  // pidió, cuánto tardó en bajar y cuánto pesa. Solo números.
+  "leads:board-data",
 ] as const;
 
 export type ClientPerformanceMetricName = (typeof CLIENT_PERFORMANCE_METRIC_NAMES)[number];
@@ -21,7 +24,22 @@ export type ClientPerformanceMetric = {
   prefetched?: boolean;
   prefetchLeadMs?: number;
   connection?: string;
+  /** `leads:board-data`: filas que llegaron. */
+  rows?: number;
+  /** `leads:board-data`: desde que se pidió hasta que terminó de bajar. */
+  downloadMs?: number;
+  /** `leads:board-data`: lo que pesa la respuesta, en KB (sin comprimir). */
+  kb?: number;
+  /** `leads:board-data`: lo que viajó por la red, en KB. */
+  transferKb?: number;
 };
+
+/** Un número entero entre 0 y `max`, o `undefined` si no vino; `null` si vino mal. */
+function boundedCount(value: unknown, max: number): number | undefined | null {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > max) return null;
+  return Math.round(value);
+}
 
 /**
  * Secciones del panel que la telemetría puede nombrar.
@@ -108,6 +126,12 @@ export function parseClientPerformanceMetric(value: unknown): ClientPerformanceM
   const connection = input.connection === undefined ? undefined : input.connection;
   if (connection !== undefined && (typeof connection !== "string" || !CONNECTIONS.has(connection))) return null;
 
+  const rows = boundedCount(input.rows, 1_000_000);
+  const downloadMs = boundedCount(input.downloadMs, 120_000);
+  const kb = boundedCount(input.kb, 1_000_000);
+  const transferKb = boundedCount(input.transferKb, 1_000_000);
+  if (rows === null || downloadMs === null || kb === null || transferKb === null) return null;
+
   return {
     name: input.name as ClientPerformanceMetricName,
     durationMs: Math.round(input.durationMs),
@@ -116,5 +140,9 @@ export function parseClientPerformanceMetric(value: unknown): ClientPerformanceM
     ...(prefetched !== undefined ? { prefetched } : {}),
     ...(prefetchLeadMs !== undefined ? { prefetchLeadMs: Math.round(prefetchLeadMs) } : {}),
     ...(connection ? { connection } : {}),
+    ...(rows !== undefined ? { rows } : {}),
+    ...(downloadMs !== undefined ? { downloadMs } : {}),
+    ...(kb !== undefined ? { kb } : {}),
+    ...(transferKb !== undefined ? { transferKb } : {}),
   };
 }

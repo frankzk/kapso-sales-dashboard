@@ -150,3 +150,89 @@ export function reportClientPerformanceMetric(
     keepalive: true,
   }).catch(() => undefined);
 }
+
+// ---------------------------------------------------------------------------
+// Leads: lo que pesa la cola y cuánto se espera hasta verla (27-11-2026)
+//
+// POR QUÉ. La línea `[leads] carga` mide el servidor. Lo que no se sabía es lo
+// que pasa después: «Por llamar» manda la cola entera al navegador (~6.700
+// leads por tienda, ~11 MB sin comprimir, medido el 27-11) en cada carga y en
+// cada recarga. Antes de cambiar cómo se lee, esto dice cuánto pesa de verdad y
+// cuánto espera la asesora. Solo números: nada de leads, clientas ni tiendas.
+// ---------------------------------------------------------------------------
+
+const LEADS_PATH = "/dashboard/leads";
+let leadsPayload: PerformanceResourceTiming | null = null;
+let leadsWatching = false;
+let lastLeadsStart = -1;
+
+function pathOfUrl(url: string): string | null {
+  try {
+    return new URL(url, typeof location === "undefined" ? "http://localhost" : location.origin).pathname;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Anota la última respuesta que trajo la pantalla de Leads (la navegación, una
+ * recarga o una acción que la revalida). Se llama una vez, al montar el panel:
+ * con `buffered` también llegan las de antes de montar, y un observador recibe
+ * las respuestas aunque la lista del navegador ya esté llena.
+ */
+export function watchLeadsPayloads(): void {
+  if (leadsWatching || typeof PerformanceObserver === "undefined") return;
+  leadsWatching = true;
+  try {
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        const resource = entry as PerformanceResourceTiming;
+        if (resource.initiatorType === "fetch" && pathOfUrl(resource.name) === LEADS_PATH) leadsPayload = resource;
+      }
+    }).observe({ type: "resource", buffered: true });
+  } catch {
+    leadsWatching = false;
+  }
+}
+
+/** La respuesta que trajo lo que se acaba de pintar: la más nueva, no contada, pedida antes de pintar. */
+export function pickLeadsEntry(
+  candidates: ReadonlyArray<Pick<PerformanceResourceTiming, "startTime" | "responseEnd">>,
+  renderedAt: number,
+  lastStart: number,
+) {
+  return [...candidates]
+    .filter((entry) => entry.startTime > lastStart && entry.startTime <= renderedAt && entry.responseEnd > 0)
+    .sort((a, b) => b.startTime - a.startTime)[0] ?? null;
+}
+
+/**
+ * La cola llegó y se pintó: `leads:board-data` con cuánto se esperó desde que se
+ * pidió (`durationMs`), cuánto tardó en bajar (`downloadMs`), cuánto pesa (`kb`,
+ * `transferKb`) y cuántas filas son. La respuesta puede anotarse un poco después
+ * de pintar (llega por partes): se espera hasta 3 s a que aparezca.
+ */
+export function reportLeadsBoardData(rows: number): void {
+  if (typeof performance === "undefined" || typeof window === "undefined") return;
+  const renderedAt = performance.now();
+  const attempt = (tries: number) => {
+    const candidates: PerformanceResourceTiming[] = [];
+    if (leadsPayload) candidates.push(leadsPayload);
+    const nav = performance.getEntriesByType?.("navigation")[0] as PerformanceNavigationTiming | undefined;
+    if (nav && pathOfUrl(nav.name) === LEADS_PATH) candidates.push(nav);
+    const entry = pickLeadsEntry(candidates, renderedAt, lastLeadsStart) as PerformanceResourceTiming | null;
+    if (!entry) {
+      if (tries < 30) window.setTimeout(() => attempt(tries + 1), 100);
+      return;
+    }
+    lastLeadsStart = entry.startTime;
+    reportClientPerformanceMetric("leads:board-data", renderedAt - entry.startTime, {
+      rows,
+      downloadMs: Math.max(0, entry.responseEnd - entry.startTime),
+      kb: Math.round((entry.decodedBodySize ?? 0) / 1024),
+      transferKb: Math.round((entry.transferSize ?? 0) / 1024),
+    });
+  };
+  attempt(0);
+}
+

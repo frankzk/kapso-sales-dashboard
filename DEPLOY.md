@@ -85,6 +85,23 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 27-11-2026 · Leads: el tope de 20.000 se avisa y se mide lo que pesa la cola en el navegador (sin migración)
+
+Sin migración, variables ni crons. No cambia qué leads salen ni su orden.
+
+- **Tope.** «Por llamar» se lee entera hasta 20.000 leads. Si una vista llega, la pantalla avisa «Esta vista pasó de
+  20.000 leads: algunos no aparecen en la lista ni en los conteos.» y la línea `[leads] carga` trae `"tope":1`.
+  El 27-11 «Todas» tenía 13.232.
+- **Medición en el navegador.** Métrica nueva `leads:board-data` en `/api/performance`: `durationMs` (desde que se
+  pidió la pantalla hasta que la lista se ve), `downloadMs`, `kb`, `transferKb` y `rows`. Solo números.
+
+Verificar, en Vercel → Logs:
+1. Buscar `leads:board-data`: aparece una línea por cada carga o recarga de Leads, con `kb` cerca de 11.000 en
+   «Por llamar» de una tienda.
+2. Buscar `"tope":1`: no debería aparecer todavía.
+
+Marcha atrás: revertir el commit. No toca datos.
+
 ### 27-11-2026 · Leads: el producto de cada lead se reconoce sin esperar al catálogo que se renueva (sin migración)
 
 Sin migración, variables ni crons. Solo cambia cuándo se espera el catálogo de productos al pintar el tablero.

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { panelPrefetchOrder, sanitizeDashboardPath } from "@/lib/client-performance";
+import { readFileSync } from "node:fs";
+import { panelPrefetchOrder, pickLeadsEntry, sanitizeDashboardPath } from "@/lib/client-performance";
 import {
   DASHBOARD_SECTIONS,
   parseClientPerformanceMetric,
@@ -83,3 +84,41 @@ describe("client performance payload", () => {
     expect(parseClientPerformanceMetric({ name: "kapso:call-save", durationMs: 999_999 })).toBeNull();
   });
 });
+
+// 27-11-2026: «Por llamar» manda la cola entera al navegador (~11 MB por tienda). Antes de cambiar cómo se lee,
+// se mide lo que pesa y lo que espera la asesora. Solo números.
+describe("lo que pesa y tarda la cola de Leads", () => {
+  it("la métrica lleva solo números acotados", () => {
+    expect(parseClientPerformanceMetric({
+      name: "leads:board-data", durationMs: 4210.4, rows: 6711, downloadMs: 1830.6, kb: 11264, transferKb: 1490, connection: "4g",
+    })).toEqual({ name: "leads:board-data", durationMs: 4210, rows: 6711, downloadMs: 1831, kb: 11264, transferKb: 1490, connection: "4g" });
+    for (const bad of [{ rows: -1 }, { rows: "6711" }, { kb: Number.NaN }, { downloadMs: 999_999 }, { transferKb: 2_000_000 }]) {
+      expect(parseClientPerformanceMetric({ name: "leads:board-data", durationMs: 10, ...bad }), JSON.stringify(bad)).toBeNull();
+    }
+    // Las demás métricas no cambian.
+    expect(parseClientPerformanceMetric({ name: "kapso:call-save", durationMs: 379 })).toEqual({ name: "kapso:call-save", durationMs: 379 });
+  });
+
+  it("cuenta la respuesta que trajo lo pintado: la más nueva, no contada, pedida antes de pintar", () => {
+    const navigation = { startTime: 0, responseEnd: 900 };
+    const refresh = { startTime: 300_000, responseEnd: 301_500 };
+    const later = { startTime: 305_000, responseEnd: 305_800 };
+    // Primera carga: la navegación.
+    expect(pickLeadsEntry([navigation], 2_000, -1)).toBe(navigation);
+    // Una recarga: la más nueva que no se contó.
+    expect(pickLeadsEntry([refresh, navigation], 302_400, 0)).toBe(refresh);
+    // Una que se pidió después de pintar no es la de lo pintado.
+    expect(pickLeadsEntry([later], 302_400, 0)).toBeNull();
+    // Ya contada, no se cuenta dos veces; sin terminar de bajar, tampoco.
+    expect(pickLeadsEntry([refresh], 302_400, 300_000)).toBeNull();
+    expect(pickLeadsEntry([{ startTime: 310_000, responseEnd: 0 }], 312_000, 0)).toBeNull();
+  });
+
+  it("el panel empieza a anotar al montar y el tablero mide cada llegada de la cola", () => {
+    const shell = readFileSync("components/dashboard-shell.tsx", "utf8");
+    expect(shell).toContain("watchLeadsPayloads();");
+    const board = readFileSync("components/leads.tsx", "utf8");
+    expect(board).toContain("reportLeadsBoardData(serverLeads.length);\n  }, [serverLeads]);");
+  });
+});
+

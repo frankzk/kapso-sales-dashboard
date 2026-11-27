@@ -78,7 +78,8 @@ describe("las cuatro pantallas dejan su línea", () => {
       expect(src, screen).toContain(`const load = pageLoadTimer("${screen}");`);
       expect(src.match(/load\.done\(\{/g)?.length, screen).toBe(1);
     }
-    expect(pages.leads).toContain("load.done({ filas: leads.length });");
+    // `tope: 1` solo cuando la lectura llegó a las 20.000 filas (27-11-2026): un número fijo, nada del lead.
+    expect(pages.leads).toContain("load.done({ filas: leads.length, ...(queueCapped ? { tope: 1 } : {}) });");
     expect(pages.pedidos).toContain("load.done({ filas: pageData.rows.length });");
     expect(pages.envios).toContain("load.done({ filas: shipments.length });");
     expect(pages.courier).toContain("load.done({ manifiestos: dispatch.manifests.length, devolucionesPendientes: pendingReturns.length });");
@@ -87,8 +88,8 @@ describe("las cuatro pantallas dejan su línea", () => {
   it("mide las lecturas que el análisis señaló como caras", () => {
     for (const label of ["cola", "reparto", "lista", "productos", "coberturaAnterior"]) expect(pages.leads).toContain(`load.timed("${label}", `);
     // Leer la cola y reconocer el producto de cada lead iban en un solo tiempo (25-11-2026).
-    expect(pages.leads).toContain('load.timed("lista", getStoreLeads(scope, view, leadsViewLimit(view)))');
-    expect(pages.leads).toContain('.then((rows) => load.timed("productos", withProductOpeners(createAdminSupabase(), rows)));');
+    expect(pages.leads).toContain('const readPromise = load.timed("lista", getStoreLeadsRead(scope, view, leadsViewLimit(view)));');
+    expect(pages.leads).toContain('.then(({ rows }) => load.timed("productos", withProductOpeners(createAdminSupabase(), rows)));');
     for (const label of ["contadores", "pagina", "filtros", "agencias", "confirmacion", "productos", "comprobantes", "pagadoSinAviso", "distritos", "sinUbicacion"]) {
       expect(pages.pedidos).toContain(`load.timed("${label}", `);
     }
@@ -98,7 +99,9 @@ describe("las cuatro pantallas dejan su línea", () => {
 
   it("la línea no lleva nada de un pedido ni de una clienta: solo `.length`", () => {
     for (const [screen, src] of Object.entries(pages)) {
-      const done = src.slice(src.indexOf("load.done({"), src.indexOf("});", src.indexOf("load.done({")));
+      // El aviso del tope de Leads es un número fijo, no un dato: se quita antes de mirar el resto.
+      const done = src.slice(src.indexOf("load.done({"), src.indexOf("});", src.indexOf("load.done({")))
+        .replace(", ...(queueCapped ? { tope: 1 } : {})", "");
       for (const value of done.split(",").map((part) => part.split(":")[1]?.trim()).filter(Boolean)) {
         expect(value!.replace(/\s*\}?$/, ""), `${screen}: ${value}`).toMatch(/\.length$/);
       }

@@ -9626,6 +9626,17 @@ la mitad de veces.
   se guarda. Un producto recién publicado en WooCommerce puede tardar unos
   minutos más en reconocerse en la lista. Pruebas:
   `test/lead-products-server.test.ts`.
+- **El tope de la cola se avisa (27-11-2026).** «Por llamar» se lee entera
+  hasta 20.000 leads por vista. Al pasar el tope, los que sobran quedan fuera
+  de la lista y de los conteos, y no son los más viejos: los ids son al azar.
+  Antes pasaba sin que nadie lo supiera; ahora la pantalla lo dice («Esta
+  vista pasó de 20.000 leads: algunos no aparecen en la lista ni en los
+  conteos.») y la línea `[leads] carga` lo cuenta (`tope`). El 27-11 la vista
+  «Todas» tenía 13.232 leads. No cambia qué leads salen ni su orden.
+- **Lo que pesa la cola en el navegador se mide (27-11-2026).** Cada vez que
+  llega la cola, el navegador deja `leads:board-data`: cuánto se esperó desde
+  que se pidió, cuánto tardó en bajar, cuánto pesa y cuántas filas son. Solo
+  números. Es la base para decidir cómo dejar de mandar la cola entera.
 
 **Por llamar: nuevos y reintentos en una sola cola (29-10-2026, decisión del owner).**
 La pestaña antes llamada «Sin llamar» se llama **Por llamar**. Las asesoras
