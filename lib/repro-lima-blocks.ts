@@ -71,8 +71,12 @@ export const LIMA_STEPS: readonly LimaStep[] = ["novedad", "llamar_despues", "no
 /** Los pasos que el equipo no trabaja: solo se miran, plegados al final del flujo. */
 export const LIMA_FOLDED_STEPS: ReadonlySet<LimaStep> = new Set<LimaStep>(["con_courier", "por_cerrar"]);
 
-export type LimaCourierState = "guia_creada" | "en_ruta" | "retornando";
-export const LIMA_COURIER_STATES: readonly LimaCourierState[] = ["guia_creada", "en_ruta", "retornando"];
+/**
+ * Dónde está con el courier. «Asignado hoy» (owner, 27-11-2026, #KP208991): GF Courier ya lo asignó a un motorizado
+ * para la ruta de hoy (en GF, «Por entregar») y todavía no sale; antes se quedaba en Programados.
+ */
+export type LimaCourierState = "guia_creada" | "asignado_hoy" | "en_ruta" | "retornando";
+export const LIMA_COURIER_STATES: readonly LimaCourierState[] = ["guia_creada", "asignado_hoy", "en_ruta", "retornando"];
 
 /** «hoy» (con lo vencido), un día `YYYY-MM-DD` de los nombrados, «despues» o «sin_fecha». */
 export type LimaAgendaKey = string;
@@ -152,19 +156,19 @@ export const LIMA_STEP_CARDS: readonly LimaCard<LimaStep>[] = [
     key: "nuevos",
     label: "Nuevos",
     // Owner, 17-11-2026: «queremos un apartado que incluya esos nuevos aquí en el flujo del día».
-    hint: "Primera salida pendiente, sin llamadas de gestión de entrega ni acuerdo de reprogramación. Puede tener rótulo interno o guía GF automática pendiente de recojo. Con motorizado GF asignado y día de salida pasa a Programados. Las llamadas anteriores a crear el pedido no cuentan como gestión de entrega. Una guía externa manual, de Aliclik o Swayp lo saca de Nuevos. Lo corregido de provincia a Lima sin día se gestiona en Hoy.",
+    hint: "Primera salida pendiente, sin llamadas de gestión de entrega ni acuerdo de reprogramación. Puede tener rótulo interno o guía GF automática pendiente de recojo. Con motorizado GF asignado y día de salida pasa a Programados; asignado para la ruta de hoy, a Con el courier · Asignado hoy. Las llamadas anteriores a crear el pedido no cuentan como gestión de entrega. Una guía externa manual, de Aliclik o Swayp lo saca de Nuevos. Lo corregido de provincia a Lima sin día se gestiona en Hoy.",
     empty: "No hay pedidos nuevos por salir con estos filtros.",
   },
   {
     key: "programados",
     label: "Programados",
-    hint: "Pendientes de salir con día: primeras salidas ya gestionadas o con guía, y reprogramados que ya salieron. Dentro, Hoy, Mañana y Después. Genera la guía de lo programado que todavía no la tenga.",
+    hint: "Pendientes de salir con día: primeras salidas ya gestionadas o con guía, y reprogramados que ya salieron. Dentro, Hoy, Mañana y Después. Genera la guía de lo programado que todavía no la tenga. Lo que GF Courier ya asignó a un motorizado para la ruta de hoy pasa a Con el courier · Asignado hoy.",
     empty: "No hay pedidos programados con estos filtros.",
   },
   {
     key: "con_courier",
     label: "Con el courier",
-    hint: "Distingue «Guía creada, pendiente de recojo» de «Recogido / en ruta». Una guía creada no prueba que el courier tenga el paquete: la custodia se muestra por separado. Con día pendiente de recojo está en Programados; lo que el courier devuelve está en No entregados.",
+    hint: "Distingue «Guía creada, pendiente de recojo», «Asignado hoy» (GF Courier ya lo asignó a un motorizado para la ruta de hoy) y «Recogido / en ruta». Una guía creada no prueba que el courier tenga el paquete: la custodia se muestra por separado. Con día pendiente de recojo y sin motorizado de hoy está en Programados; lo que el courier devuelve está en No entregados.",
     empty: "Ningún courier lleva pedidos con estos filtros.",
   },
   {
@@ -189,7 +193,7 @@ export const LIMA_STEP_PARTS: Partial<Record<LimaStep, readonly LimaSubFilter[] 
   programados: ["hoy", "manana", "despues"],
   // Los nuevos, por día de su guía; sin guía ni día, al final (owner, 17-11-2026).
   nuevos: ["nuevos_hoy", "nuevos_manana", "nuevos_despues", "nuevos_sin_dia"],
-  con_courier: ["guia_creada", "en_ruta"],
+  con_courier: ["guia_creada", "asignado_hoy", "en_ruta"],
 };
 
 export const LIMA_SUB_FILTERS: Record<LimaSubFilter, LimaCard<LimaSubFilter> & { parent: LimaStep | LimaTask | "agenda" }> = {
@@ -308,6 +312,12 @@ export const LIMA_COURIER_CARDS: readonly LimaCard<LimaCourierState>[] = [
     label: "Guía creada, pendiente de recojo",
     hint: "Tiene guía de courier externo, pero todavía espera el recojo. Revisa la custodia registrada; si falta, se muestra sin confirmar.",
     empty: "No hay guías creadas sin recoger con estos filtros.",
+  },
+  {
+    key: "asignado_hoy",
+    label: "Asignado hoy",
+    hint: "GF Courier ya lo asignó a un motorizado para la ruta de hoy (en GF, «Por entregar»): falta que el motorizado lo reciba y salga. Si GF lo retira de la carga o lo pasa a otro día, vuelve a Programados; cuando el motorizado lo recibe, pasa a Recogido / en ruta.",
+    empty: "GF Courier no tiene pedidos asignados para la ruta de hoy con estos filtros.",
   },
   {
     key: "en_ruta",
@@ -505,6 +515,16 @@ export function limaCourierState(row: LimaPendingOrder): LimaCourierState | null
 }
 
 /**
+ * ¿GF lo asignó a un motorizado para la ruta de hoy (en GF, «Por entregar»)? Con el día de la ruta; sin él, por el
+ * «dd/mm» de la fila. Puro.
+ */
+export function gfAssignedToday(assigned: LimaPendingOrder["gfAssigned"], today: string): boolean {
+  if (!assigned?.rider.trim()) return false;
+  if (assigned.routeDate) return assigned.routeDate === today;
+  return assigned.day === `${today.slice(8, 10)}/${today.slice(5, 7)}`;
+}
+
+/**
  * «Novedad del courier»: En curso, con la guía viva de un courier que reporta
  * un problema con la clienta (`isCustomerNovelty`, la regla de «Lima
  * trabados»), sin que el paquete esté volviendo. Al momento: es una llamada,
@@ -688,7 +708,10 @@ export interface LimaRowClass {
  * siempre: con su día (lo vencido en Hoy) o en «Sin fecha».
  */
 export function classifyLimaRow(row: LimaPendingOrder, c: PendingCase | undefined, today: string, window: readonly string[], opts: LimaClassifyOptions = {}): LimaRowClass {
-  const courier = limaCourierState(row);
+  // Con la guía GF ya asignada a un motorizado para la ruta de hoy (owner, 27-11-2026, #KP208991: «cuando ya esté
+  // asignado al motorizado… el día de hoy ya no estén en Programados, sino pase a Con el courier»): «Asignado hoy».
+  const baseCourier = limaCourierState(row);
+  const courier: LimaCourierState | null = baseCourier === "guia_creada" && gfAssignedToday(row.gfAssigned, today) ? "asignado_hoy" : baseCourier;
   const base = limaTaskOf(row, c, today);
   // Una ruta vencida sin reporte ya no está «con el courier»: es un no entregado (owner, 15-11-2026).
   const noReport = base === null && routeWithoutReport(row, courier, today);
@@ -732,7 +755,8 @@ export function classifyLimaRow(row: LimaPendingOrder, c: PendingCase | undefine
     && (!row.courierPickup || row.courierPickup.courier === "gf_courier");
   // Owner, 19-11-2026: la guía automática con motorizado asignado y día ya es
   // Programados. Sigue pendiente de recojo: asignación no es salida física.
-  const gfAssignedWithDay = automaticGfOnly && Boolean(row.gfAssigned?.rider.trim()) && planned === "programados";
+  // Asignada para la ruta de hoy, Con el courier · Asignado hoy (owner, 27-11-2026), tampoco Nuevos.
+  const gfAssignedWithDay = automaticGfOnly && Boolean(row.gfAssigned?.rider.trim()) && (planned === "programados" || courier === "asignado_hoy");
   const unworked = limaIsNew(row) && !contacted && !c?.agreement && c?.list !== "programados" && !gfAssignedWithDay && (!liveGuideCourier(row) || automaticGfOnly);
   const firstStep: LimaStep = unworked && (planned === "por_sacar" || planned === "programados" || planned === "con_courier") ? "nuevos" : planned;
   // Un reintento sin día se gestiona con los no entregados, aunque el Master haya vuelto a Preparación.
@@ -880,7 +904,7 @@ export function limaBoardCounts(rows: readonly LimaPendingOrder[], classes: Read
     task: { primer_despacho: 0, no_entregados: 0, novedad: 0, llamar_despues: 0, por_cerrar: 0 },
     sub: { nunca_salieron: 0, mas_de_30: 0, guia_sin_recoger: 0, salieron_sin_dia: 0, salida_por_verificar: 0, por_acordar: 0, reintentos_aliclik: 0, sin_reporte: 0, esperan_anulacion: 0, reprogramados: 0, hoy_sin_guia: 0, manana_sin_guia: 0, nuevos_hoy: 0, nuevos_manana: 0, nuevos_despues: 0, nuevos_sin_dia: 0, nuevos_sin_guia: 0 },
     agenda: { hoy: 0, manana: 0, despues: 0 },
-    courier: { guia_creada: 0, en_ruta: 0, retornando: 0 },
+    courier: { guia_creada: 0, asignado_hoy: 0, en_ruta: 0, retornando: 0 },
     autoGuideManana: 0,
     enRutaHoy: 0,
   };
@@ -920,7 +944,7 @@ const TASK_SET = new Set<string>(LIMA_TASKS);
 const STEP_SET = new Set<string>(LIMA_STEPS);
 const COURIER_SET = new Set<string>(LIMA_COURIER_STATES);
 /** El paso donde vive el filtro de cada estado del courier: lo que vuelve es un no entregado. */
-const COURIER_STEP: Record<LimaCourierState, LimaStep> = { guia_creada: "con_courier", en_ruta: "con_courier", retornando: "no_entregados" };
+const COURIER_STEP: Record<LimaCourierState, LimaStep> = { guia_creada: "con_courier", asignado_hoy: "con_courier", en_ruta: "con_courier", retornando: "no_entregados" };
 
 /**
  * La parte de su paso, para «Sacar a reparto» y «No entregados» (owner,
@@ -1194,6 +1218,7 @@ export function courierNowText(row: LimaPendingOrder): string | null {
  * courier, de la ruta del courier»):
  * - **Guía creada**: el día de recojo (Aliclik) o el que se le pidió a GF
  *   Courier; uno que pasó, «Vencido · vie 13/11». Sin día, «Guía creada».
+ * - **Asignado hoy**: «Hoy», con el motorizado que GF le asignó.
  * - **En ruta** y **Retornando**: el día de la ruta (`limaRouteDay`): «Hoy» o
  *   «dom 15/11».
  */
@@ -1208,6 +1233,7 @@ export function courierRouteText(row: LimaPendingOrder, cls: Pick<LimaRowClass, 
     if (!day) return { day: "Guía creada", detail: "Sin día del courier", overdue: false };
     return { day: agendaDayText(day, today), detail, overdue: day < today };
   }
+  if (cls.courier === "asignado_hoy") return { day: "Hoy", detail: row.gfAssigned?.rider ? `Asignado a ${row.gfAssigned.rider}` : "Asignado", overdue: false };
   const day = cls.routeDay ?? limaRouteDay(row);
   const detail = cls.courier === "retornando" ? "Retornando" : "En ruta";
   if (!day) return { day: detail, detail: "Sin día de ruta", overdue: false };
@@ -1279,6 +1305,10 @@ export function limaNextStep(row: LimaPendingOrder, c: PendingCase | undefined, 
   }
   if (cls.courier === "retornando") return "Recibir la devolución en Almacén cuando llegue.";
   if (cls.courier === "en_ruta") return `Solo seguimiento: lo tiene ${courierName}.`;
+  if (cls.courier === "asignado_hoy") {
+    const rider = row.gfAssigned?.rider;
+    return `GF Courier ya lo asignó${rider ? ` a ${rider}` : " a un motorizado"} para la ruta de hoy: sale cuando lo reciba. Solo seguimiento.`;
+  }
   if (cls.courier === "guia_creada") {
     // El día de recojo es el de la clase: si su día pasó sin recogerlo, el próximo día de reparto.
     const pickup = row.courierPickup && cls.agendaDay && cls.agendaDay >= today ? cls.agendaDay : null;
@@ -1316,7 +1346,7 @@ export function limaNextStepIsInfo(row: LimaPendingOrder, cls: LimaRowClass, tod
   if (cls.step !== "por_cerrar" && limaReviewReasons(row, cls).includes("guides")) return false;
   if (cls.needsToday || (cls.step === "por_sacar" && cls.departureUnknown)) return false;
   if (cls.task !== null || cls.missedPickup || cls.courier === "retornando") return false;
-  if (cls.courier === "en_ruta" || cls.courier === "guia_creada") return true;
+  if (cls.courier === "en_ruta" || cls.courier === "asignado_hoy" || cls.courier === "guia_creada") return true;
   if (!cls.guide && cls.agenda === "hoy") return false;
   if (!cls.guide && cls.agenda === "manana") return cls.autoGuideBy === "fenix" || cls.autoGuideBy === "aliclik" || cls.autoGuide;
   if (cls.agendaDay && cls.agendaDay < today) return false;

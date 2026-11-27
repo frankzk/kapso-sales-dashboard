@@ -48,7 +48,7 @@ describe("detalle operativo de los ocho bloques", () => {
     ];
     const classes = classifyLimaRows(rows, [], "2026-11-18");
     const groups = limaBlockDetails(rows, classes, "con_courier");
-    expect(groups[0]).toMatchObject({ title: "Estado del recojo", items: [{ key: "pickup-pending", count: 2 }, { key: "pickup-done", count: 1 }] });
+    expect(groups[0]).toMatchObject({ title: "Estado del recojo", items: [{ key: "pickup-pending", count: 2 }, { key: "pickup-assigned", count: 0, label: "Asignado hoy" }, { key: "pickup-done", count: 1 }] });
     expect(groups[0]!.items.reduce((sum, i) => sum + i.count, 0)).toBe(3);
     expect(rows.filter((r) => limaDetailMatches(r, classes.get(r.orderId)!, "pickup-pending")).map((r) => r.orderId)).toEqual(["pending", "unknown"]);
     expect(rows.filter((r) => limaDetailMatches(r, classes.get(r.orderId)!, "pickup-done")).map((r) => r.orderId)).toEqual(["picked"]);

@@ -18,9 +18,12 @@ export function limaDepartureState(row: LimaPendingOrder): "never" | "left" | "u
 export function limaDetailFacts(row: LimaPendingOrder, cls: LimaRowClass) {
   const departure = limaDepartureState(row);
   const scheduled = Boolean(cls.agendaDay);
-  const waiting = cls.courier === null || cls.courier === "guia_creada";
+  const waiting = cls.courier === null || cls.courier === "guia_creada" || cls.courier === "asignado_hoy";
   return { departure, scheduled, reprogrammed: scheduled && (cls.agreed || (departure === "left" && waiting)) };
 }
+
+/** El nombre de un estado del courier, por su clave (no por su posición: «Asignado hoy» va entre los dos de antes). */
+const courierCard = (key: string) => LIMA_COURIER_CARDS.find((card) => card.key === key)!.label;
 
 /** El mismo predicado se usa para la cifra y para la lista que abre. */
 export function limaDetailMatches(row: LimaPendingOrder, cls: LimaRowClass, key: string): boolean {
@@ -60,6 +63,7 @@ export function limaDetailMatches(row: LimaPendingOrder, cls: LimaRowClass, key:
     case "moved-lima": return Boolean(row.management?.movedToLimaAt);
     case "manage-today": return cls.needsToday === true;
     case "pickup-pending": return cls.courier === "guia_creada";
+    case "pickup-assigned": return cls.courier === "asignado_hoy";
     case "pickup-done": return cls.courier === "en_ruta";
     case "custody-unknown": return !row.ops?.custody;
     case "no-report": return !row.ops?.reportedStatus;
@@ -96,7 +100,7 @@ export function limaBlockDetails(rows: readonly LimaPendingOrder[], classes: Rea
       { ...group("Gestión pendiente", [["failed-agree", "Por acordar nuevo intento"], ["failed-retry", "Reintentos Aliclik"], ["failed-no-report", "Sin reporte de la ruta"], ["review", "Para revisión"]], "La gestión se cruza con la ubicación: un pedido puede estar con el courier y sin reporte. Para revisión puede coincidir con otras cifras; no se suma aparte."), prominent: true },
       { ...group("Motivos de revisión", Object.entries(LIMA_REVIEW_LABELS).map(([reason, label]) => [`review:${reason}`, label]), "Se conserva su bloque hasta verificar los datos. No anula ventas ni guías automáticamente."), prominent: true },
     ] : []),
-    ...(step === "con_courier" ? [group("Estado del recojo", [["pickup-pending", LIMA_COURIER_CARDS[0]!.label], ["pickup-done", LIMA_COURIER_CARDS[1]!.label]], "Estas dos cifras suman el bloque. Crear una guía no confirma el recojo. Consulta la custodia del paquete para saber quién lo tiene; si no consta, no se supone.")] : []),
+    ...(step === "con_courier" ? [group("Estado del recojo", [["pickup-pending", courierCard("guia_creada")], ["pickup-assigned", courierCard("asignado_hoy")], ["pickup-done", courierCard("en_ruta")]], "Estas tres cifras suman el bloque. Crear una guía no confirma el recojo; GF Courier asignado para hoy tampoco es salida. Consulta la custodia del paquete para saber quién lo tiene; si no consta, no se supone.")] : []),
     group("Salidas a reparto", [["never", "Nunca salieron"], ["left", "Salieron al menos una vez"], ["unknown", "Sin evidencia suficiente"]], "Estas tres cifras suman el bloque. Tener guía o motorizado asignado no prueba una salida."),
     group("Intentos de entrega registrados", attempts.map((n) => [`attempts:${n}`, `${n} ${n === 1 ? "intento" : "intentos"}`]), "Suman el bloque. Son visitas reportadas; una salida sin resultado todavía puede tener 0 intentos."),
     group("Guías y rótulos", [["guide", "Con guía o rótulo vigente"], ["no-guide", "Sin guía o rótulo vigente"], ["auto-gf-guide", "Con guía GF automática pendiente de recojo"], ["old-guide", "Con documentos en el historial"], ["annulled-guide", "Con guía o rótulo anulado"], ["returned-guide", "Con guía o rótulo devuelto"]], "Con y sin documento vigente suman el bloque. La guía GF automática permite seguir en Nuevos mientras no haya gestión ni salida. El historial incluye documentos anteriores y puede cruzarse."),

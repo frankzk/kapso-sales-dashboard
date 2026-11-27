@@ -2,7 +2,7 @@ import type { createAdminSupabase } from "@/lib/db";
 import { stageClock, stageTimed } from "@/lib/page-load-log";
 import type { ReproScope } from "@/lib/repro-lima-access";
 import { allCourierRows, allCourierRowsCounted, COURIER_ROWS_WIDE_BATCH, courierRowsByIds, courierRowsByIdsWide } from "@/lib/courier-flow";
-import { buildRiderSuggestions, parseGfAssigned, RIDER_SHARE_DAYS, shownRiderSuggestion, type GfAssignedRider, type RiderShareRow } from "@/lib/lima-rider-suggest";
+import { buildRiderSuggestions, gfAssignedFromEvents, RIDER_SHARE_DAYS, shownRiderSuggestion, type GfAssignedRider, type GfStageEvent, type RiderShareRow } from "@/lib/lima-rider-suggest";
 import { districtKey, isLimaPendingStage, LIMA_PENDING_STAGES, limaBoxNeverLeft, type LimaPendingGf, type LimaPendingOps, type LimaPendingOrder, type NeverLeftGuide } from "@/lib/repro-lima-pending";
 import { isCurrentBoxDay } from "@/lib/dispatch-plan";
 import { outputsBlockingRetry } from "@/lib/gf-retry";
@@ -464,29 +464,33 @@ async function loadGfReschedules(admin: Admin, guides: ReadonlyMap<string, strin
 }
 
 /**
- * El motorizado que GF Courier ya asignó a cada guía GF que todavía no salió
+ * El motorizado que GF Courier tiene asignado AHORA a cada guía GF viva
  * (`guides`: número de guía → pedido), por pedido (owner, 17-11-2026: «agrega
- * el asignado»). Sale de la línea «GF Courier: asignado a …» que deja su
- * webhook (`parseGfAssigned`), solo la de ESA guía (una guía anterior no
- * cuenta) y la más reciente. Por pedido (índice `order_events_order_idx`), en
- * lotes de 200.
+ * el asignado»; 27-11-2026, #KP208991: el reprogramado asignado hoy a Yordani).
+ * Sale del último aviso de estado de ESA guía (`gfAssignedFromEvents`): si GF lo
+ * retiró de la carga o ya salió, nadie. Lee solo los avisos de esas guías
+ * (`gf_webhook_events_tracking_idx`), de 50 en 50 para no pasar las 1.000 filas
+ * por lectura.
  */
 async function loadGfAssigned(admin: Admin, guides: ReadonlyMap<string, string>): Promise<Map<string, GfAssignedRider>> {
-  const out = new Map<string, GfAssignedRider>();
-  const orderIds = [...new Set(guides.values())];
-  for (let offset = 0; offset < orderIds.length; offset += 200) {
-    const { data, error } = await admin.from("order_events")
-      .select("order_id,guide_code,note,occurred_at")
-      .in("order_id", orderIds.slice(offset, offset + 200))
-      .eq("kind", "courier_report").eq("courier", "gf_courier")
-      .ilike("note", "GF Courier: asignado a %")
-      .order("occurred_at", { ascending: false });
+  const codes = [...guides.keys()];
+  const batches: string[][] = [];
+  for (let offset = 0; offset < codes.length; offset += 50) batches.push(codes.slice(offset, offset + 50));
+  const rows = (await Promise.all(batches.map(async (batch) => {
+    const { data, error } = await admin.from("gf_webhook_events")
+      .select("tracking_id,type,received_at,created:payload->>created_at,stage:payload->data->stage")
+      .in("tracking_id", batch)
+      .in("type", ["order.status_changed", "order.returned_to_warehouse"]);
     if (error) throw new Error(`No pudimos leer los motorizados asignados por GF Courier: ${error.message}`);
-    for (const e of (data ?? []) as Array<{ order_id: string; guide_code: string | null; note: string | null }>) {
-      if (out.has(e.order_id) || !e.guide_code || guides.get(e.guide_code) !== e.order_id) continue;
-      const assigned = parseGfAssigned(e.note);
-      if (assigned) out.set(e.order_id, assigned);
-    }
+    return (data ?? []) as Array<GfStageEvent & { tracking_id: string | null }>;
+  }))).flat();
+  const byGuide = new Map<string, GfStageEvent[]>();
+  for (const r of rows) if (r.tracking_id) byGuide.set(r.tracking_id, [...(byGuide.get(r.tracking_id) ?? []), r]);
+  const out = new Map<string, GfAssignedRider>();
+  for (const [guide, events] of byGuide) {
+    const orderId = guides.get(guide);
+    const assigned = gfAssignedFromEvents(events);
+    if (orderId && assigned) out.set(orderId, assigned);
   }
   return out;
 }
@@ -599,8 +603,9 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
   }
   const [gfPickups, gfAssigned, neverLeftRows, gfReschedules] = await Promise.all([
     loadGfGuideDays(admin, gfGuides),
-    // Best-effort: sin la lectura, la fila no dice el asignado (y sigue sugiriendo).
-    loadGfAssigned(admin, gfGuides).catch(() => new Map<string, GfAssignedRider>()),
+    // Best-effort: sin la lectura, la fila no dice el asignado (y sigue sugiriendo). También la guía en novedad que GF
+    // vuelve a sacar: el reprogramado asignado hoy a un motorizado (owner, 27-11-2026, #KP208991).
+    loadGfAssigned(admin, new Map([...gfGuides, ...incidentGuides])).catch(() => new Map<string, GfAssignedRider>()),
     inBatchesOf500(neverLeftCandidates, async (batch) => {
       const { data, error } = await admin.from("shipments")
         .select("order_id,courier,delivery_status,custody_state,dispatched_at,out_for_delivery_at,returned_at")
