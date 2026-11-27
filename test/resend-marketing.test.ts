@@ -31,10 +31,12 @@ describe("tramos y nombres", () => {
   it("van de 6 meses a todos, y el de 6 meses es el primero", () => {
     expect(RESEND_BUCKETS.map((b) => [b.key, b.months])).toEqual([
       ["6m", 6],
+      ["9m", 9],
       ["12m", 12],
       ["todos", null],
     ]);
     expect(isResendBucket("6m")).toBe(true);
+    expect(isResendBucket("9m")).toBe(true);
     expect(isResendBucket("24m")).toBe(false);
     expect(isResendBucket(null)).toBe(false);
   });
@@ -42,6 +44,7 @@ describe("tramos y nombres", () => {
   it("nombra el segmento con la tienda y el tramo, y el tema con la tienda", () => {
     expect(resendSegmentName("Kenku Peru", "6m")).toBe("Kenku Peru · pidieron en 6 meses");
     expect(resendSegmentName("Aurela", "todos")).toBe("Aurela · todos los suscritos");
+    expect(resendSegmentName("Kenku Peru", "9m")).toBe("Kenku Peru · pidieron en 9 meses");
     expect(resendSegmentKey("s1", "12m")).toBe("s1:12m");
     expect(resendTopicName("  Kenku Peru ")).toBe("Kenku Peru");
     expect(resendTopicName("x".repeat(80))).toHaveLength(RESEND_TOPIC_NAME_MAX);

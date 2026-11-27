@@ -213,6 +213,15 @@ where courier = 'aliclik' and updated_at > now() - interval '30 minutes';
 
 `solo_por_el_sello` debe quedar en 0 (antes, unas 130 por pasada).
 
+### 27-11-2026 · Correo · Resend: tramo «Pidieron en los últimos 9 meses» (0357, MOM §46.2)
+
+**Migración 0357_resend_9_meses: ya aplicada en producción (27-11-2026), antes del código.** `resend_imports.bucket`
+acepta `9m` y `resend_marketing_counts` devuelve también `last_9m` (se borra y se vuelve a crear con los mismos
+permisos: solo `service_role`). Aditiva; no toca filas. Sin variables nuevas.
+
+El plan de Resend de Kenku es de 10.000 contactos: 9 meses son 9.188 y 10 meses ya pasan (10.140). La página muestra
+el tramo nuevo entre 6 y 12 meses, con su «Subir a Resend» y su CSV.
+
 ### 26-11-2026 · Correo · Resend: el tema y el segmento se crean al subir, no al guardar la clave (sin migración, MOM §46.4)
 
 Sin migración ni variables. El plan gratis de Resend permite 3 segmentos y Kapta creaba 6 al guardar la clave

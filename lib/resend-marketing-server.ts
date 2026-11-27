@@ -146,8 +146,13 @@ export async function loadResendPanel(now: Date = new Date()): Promise<ResendPan
   countRes.forEach((res, i) => {
     if (isResendMigrationMissing(res.error)) return;
     const map = new Map<string, Record<ResendBucket, number>>();
-    for (const r of (res.data ?? []) as { store_id: string; total: number; last_6m: number; last_12m: number }[]) {
-      map.set(r.store_id, { "6m": Number(r.last_6m) || 0, "12m": Number(r.last_12m) || 0, todos: Number(r.total) || 0 });
+    for (const r of (res.data ?? []) as { store_id: string; total: number; last_6m: number; last_9m?: number | null; last_12m: number }[]) {
+      map.set(r.store_id, {
+        "6m": Number(r.last_6m) || 0,
+        "9m": Number(r.last_9m) || 0,
+        "12m": Number(r.last_12m) || 0,
+        todos: Number(r.total) || 0,
+      });
     }
     countsByOrg.set(orgIds[i]!, map);
   });
@@ -174,7 +179,7 @@ export async function loadResendPanel(now: Date = new Date()): Promise<ResendPan
           .map((st) => ({
             id: st.id,
             name: st.name,
-            counts: counts?.get(st.id) ?? (counts ? { "6m": 0, "12m": 0, todos: 0 } : null),
+            counts: counts?.get(st.id) ?? (counts ? { "6m": 0, "9m": 0, "12m": 0, todos: 0 } : null),
             topicReady: !!topics[st.id],
             segmentsReady: RESEND_BUCKETS.map((b) => b.key).filter((b) => !!segments[resendSegmentKey(st.id, b)]),
           })),
