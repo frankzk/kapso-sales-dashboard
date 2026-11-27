@@ -6,11 +6,11 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { orderOrigin, orderOriginRawFacts, type OrderOriginFacts } from "@/lib/order-origin";
+import { orderArrival, orderOrigin, orderOriginRawFacts, type OrderOriginFacts } from "@/lib/order-origin";
 
 const read = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8");
 
-const NO_RAW = { wooCreatedVia: null, wooPaymentMethod: null, kaptaChannel: null, sourceName: null };
+const NO_RAW = { wooCreatedVia: null, wooPaymentMethod: null, kaptaChannel: null, sourceName: null, utm: null };
 
 function facts(over: Partial<OrderOriginFacts>): OrderOriginFacts {
   return {
@@ -39,6 +39,7 @@ describe("orderOriginRawFacts", () => {
       wooPaymentMethod: "flowpayment",
       kaptaChannel: "web_formulario",
       sourceName: null,
+      utm: null,
     });
   });
   it("acepta el atributo con la forma de GraphQL y sin raw no falla", () => {
@@ -168,12 +169,66 @@ describe("orderOrigin", () => {
   });
 });
 
+describe("Llegó por (las marcas del enlace, 27-11-2026)", () => {
+  // #KP209492: formulario COD de WooCommerce que llegó por el correo de Black Friday.
+  const emailRaw = orderOriginRawFacts({
+    woo: { created_via: "cod-core-form", payment_method: "cod" },
+    note_attributes: [
+      { name: "kapta_channel", value: "web_formulario" },
+      { name: "utm_campaign", value: "black_friday_2026" },
+      { name: "utm_medium", value: "email" },
+      { name: "utm_source", value: "resend" },
+    ],
+  });
+
+  it("lee las utm de los atributos sin perder el kapta_channel", () => {
+    expect(emailRaw.kaptaChannel).toBe("web_formulario");
+    expect(emailRaw.utm).toEqual({ source: "resend", medium: "email", campaign: "black_friday_2026", content: null, id: null });
+  });
+
+  it("#KP209492: el correo de Black Friday; el origen del pedido no cambia", () => {
+    const o = orderOrigin(facts({ platform: "woocommerce", tags: ["easysell_cod_form"], paymentGateway: "cod", raw: emailRaw }));
+    expect(o.label).toBe("Web · formulario contra entrega");
+    expect(o.arrival).toEqual({
+      kind: "correo",
+      label: "Correo · black_friday_2026",
+      evidence: "utm_source = resend · utm_medium = email · utm_campaign = black_friday_2026",
+    });
+  });
+
+  it("los anuncios de Meta, aunque la fuente sea el nombre del conjunto", () => {
+    const fb = orderArrival({ source: "fb", medium: "Facebook_Mobile_Reels", campaign: "CBO+Feel+Virgin+|+0807", content: null, id: "120252662206000120" });
+    expect(fb?.kind).toBe("meta");
+    expect(fb?.label).toBe("Anuncio de Meta · CBO Feel Virgin | 0807");
+    const set = orderArrival({ source: "CBO+KC+ETHIOPIAN+0211", medium: "CBO+KC+ETHIOPIAN+0211+CINCO", campaign: "CBO+Ethiopian+|+0903", content: "Facebook_Mobile_Feed", id: null });
+    expect(set?.kind).toBe("meta");
+  });
+
+  it("TikTok, Google y lo demás por su nombre; sin marcas, nada", () => {
+    expect(orderArrival({ source: "tiktok", medium: "paid", campaign: "Astaxantina+|+26.09", content: null, id: null })?.label).toBe(
+      "Anuncio de TikTok · Astaxantina | 26.09",
+    );
+    expect(orderArrival({ source: "google", medium: "cpc", campaign: null, content: null, id: null })?.kind).toBe("google");
+    expect(orderArrival({ source: "influencer_ana", medium: null, campaign: "navidad", content: null, id: null })?.label).toBe("influencer_ana · navidad");
+    expect(orderArrival(null)).toBeNull();
+    expect(orderOrigin(facts({})).arrival).toBeNull();
+  });
+
+  it("en Shopify también lee la URL de entrada (landing_site)", () => {
+    const raw = orderOriginRawFacts({ source_name: "web", landing_site: "/products/x?utm_source=resend&utm_medium=email&utm_campaign=navidad" });
+    expect(raw.utm?.campaign).toBe("navidad");
+    expect(orderOrigin(facts({ raw })).arrival?.label).toBe("Correo · navidad");
+  });
+});
+
 describe("la ficha y el MOM", () => {
   it("el cajón muestra «Origen» con su evidencia, y el detalle lo arma sin consultas por fila", () => {
     const drawer = read("components/order-drawer.tsx");
     expect(drawer).toContain(">Origen</dt>");
     expect(drawer).toContain("detail.origin.label");
     expect(drawer).toContain("detail.origin.evidence");
+    expect(drawer).toContain("Llegó por ");
+    expect(drawer).toContain("detail.origin.arrival.label");
     const access = read("lib/orders-master-access.ts");
     expect(access).toMatch(/ORDER_DETAIL_COLUMNS = "[^"]*tags,kapso_conversation_id/);
     expect(access).toContain("loadOrderOriginSources(sb, row, orderId)");
@@ -185,5 +240,7 @@ describe("la ficha y el MOM", () => {
     expect(mom).toContain("«Web · checkout (Flow)»");
     expect(mom).toContain("«Chatby · carrito recuperado #F…»");
     expect(mom).toContain("`lib/order-origin.ts`");
+    expect(mom).toContain("**Llegó por (27-11-2026");
+    expect(mom).toContain("«Correo · black_friday_2026»");
   });
 });

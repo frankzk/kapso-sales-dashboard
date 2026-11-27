@@ -141,6 +141,30 @@ falta, no un error de la ficha. Regla en `lib/order-origin.ts`
 El nombre de la asesora es el mismo que la línea de tiempo de la ficha
 (su usuario de Kapta). Pruebas: `test/order-origin.test.ts`.
 
+**Llegó por (27-11-2026, pedido del owner del 27-11-2026).** Debajo de
+«Origen», la ficha dice por dónde llegó la clienta a la tienda, leído de las
+marcas del enlace (`utm_*`): en WooCommerce, los atributos que copia
+`wooNoteAttributes` (`_wc_order_attribution_utm_*`); en Shopify, los
+`note_attributes` o, si no están, la URL de entrada (`landing_site`). «Origen»
+no cambia: sigue diciendo por dónde se creó el pedido (un formulario, el
+checkout, una asesora). Sin marcas, no aparece nada. La evidencia (las `utm_*`
+tal cual) va debajo en 12 px. Reglas, en este orden:
+
+| Marcas | «Llegó por» |
+|---|---|
+| `utm_medium` es `email`/`e-mail`/`newsletter`, o `utm_source` es `resend`, `klaviyo`, `mailchimp`, `brevo`, `sendinblue`, `email` o `newsletter` | «Correo · <campaña>» |
+| `tiktok` en cualquiera de las marcas | «Anuncio de TikTok · <campaña>» |
+| `utm_source` es `fb`/`ig`/`meta`, o `facebook`/`instagram`/`messenger`/`audience_network` en la fuente, el medio o el contenido (Meta pone a veces el nombre del conjunto como fuente) | «Anuncio de Meta · <campaña>» |
+| `utm_source` con `google`/`youtube`, o `utm_medium = cpc` | «Google · <campaña>» |
+| Cualquier otra fuente | «<fuente> · <campaña>» |
+
+La campaña se muestra decodificada (`+` → espacio) y cortada a 70 caracteres.
+Caso real: #KP209492, formulario contra entrega desde el correo de Black
+Friday (`utm_source = resend`, `utm_medium = email`, `utm_campaign =
+black_friday_2026`) → Origen «Web · formulario contra entrega», Llegó por
+«Correo · black_friday_2026». Es solo lectura en la ficha: no cambia el canal
+de venta, el de cierre ni el gasto de anuncios.
+
 ### Salida
 
 Intento físico de entregar un pedido. Una salida corresponde a un paquete, un
