@@ -421,10 +421,13 @@ Medido el 27-11-2026:
 Por etapas, cada una sale sola y se mide:
 1. **Medir y avisar (27-11).** `leads:board-data` dice cuánto pesa y cuánto
    espera la asesora; el tope de 20.000 se avisa en la pantalla.
-2. **La misma lógica, menos datos.** El navegador sigue filtrando y contando,
-   pero recibe solo lo que usa para eso; lo que solo se ve al mirar una fila
-   (resumen del carrito, contexto, dirección, enlaces) llega con las filas que
-   se ven. Sin cambiar ninguna regla. Ahorro estimado: un tercio.
+2. **La misma lógica, menos datos (27-11).** La cola viaja como filas: los
+   nombres de los 47 campos una vez en vez de en cada lead. 38 % menos (de ~11
+   a ~7 MB por tienda), medido con los datos de ese día, sin tocar ninguna
+   lógica. Se descartó primero mandar solo lo que se usa para filtrar y pedir el
+   resto al ver cada fila: el peso está repartido (ningún campo pasa del 11 %)
+   y casi todos los campos se usan para filtrar, contar u ordenar, así que
+   ahorraba menos y obligaba a pedir datos al hacer scroll.
 3. **Filtros y conteos en el servidor.** El navegador recibe solo las filas que
    se ven y los conteos. Es lo que de verdad saca el peso y quita el tope, pero
    cambia cómo se siente la pantalla y necesita decisiones del owner: cada

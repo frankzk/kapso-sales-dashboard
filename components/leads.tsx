@@ -128,6 +128,7 @@ import { NextLeadCard, SegmentBadge, useNextLead } from "@/components/leads-next
 import { VentaTelefonica } from "@/components/venta-telefonica";
 import type { LeadDrawerProps, LeadDrawerUpdate } from "@/components/leads-drawer";
 import { reportClientPerformanceMetric, reportLeadsBoardData } from "@/lib/client-performance";
+import { unpackRows, type PackedRows } from "@/lib/packed-rows";
 
 const LeadsInsightsPanel = dynamic(
   () => import("@/components/leads-insights").then((module) => module.LeadsInsightsPanel),
@@ -497,7 +498,7 @@ export function LeadsBoard({
   view,
   counts: serverCounts,
   queueSignature,
-  leads: serverLeads,
+  leads: serverLeadsWire,
   adNames,
   adDeclarations,
   waNumbers,
@@ -536,7 +537,8 @@ export function LeadsBoard({
   /** Resumen del estado de la cola en el servidor. El refresco en vivo solo
    *  recarga cuando esta cadena cambia (ver `getLeadQueueSnapshot`). */
   queueSignature?: string;
-  leads: LeadRow[];
+  /** La cola: como filas empaquetadas (`packRows`) o, si no se pudo, como lista. */
+  leads: LeadRow[] | PackedRows;
   adNames?: Record<string, AdMeta>;
   /** `tienda::anuncio → declaraciones con fecha` (ver lib/ad-products.ts). */
   adDeclarations?: Record<string, AdDeclaration[]>;
@@ -573,6 +575,9 @@ export function LeadsBoard({
   /** La lectura llegó al tope de 20.000 filas: faltan leads en la lista y en los conteos (27-11-2026). */
   queueCapped?: boolean;
 }) {
+  // La cola llega empaquetada (27-11-2026): se rearma una vez por llegada, y la
+  // misma lista mientras no llegue otra.
+  const serverLeads = useMemo(() => unpackRows<LeadRow>(serverLeadsWire), [serverLeadsWire]);
   const [board, setBoard] = useState({ sourceLeads: serverLeads, sourceCounts: serverCounts, leads: serverLeads, counts: serverCounts });
   // Cada vez que llega la cola del servidor: cuánto se esperó y cuánto pesa (27-11-2026).
   useEffect(() => {

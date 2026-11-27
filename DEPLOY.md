@@ -85,6 +85,21 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 27-11-2026 · Leads: la cola viaja como filas, 38 % más liviana (sin migración, etapa 2)
+
+Sin migración, variables ni crons. No cambia ninguna regla ni lo que se ve.
+
+«Por llamar» mandaba la cola como lista de objetos y cada lead repetía el nombre de sus 47 campos: medido el 27-11, el
+38 % de lo que viajaba (11 MB por tienda). Ahora va como filas (`lib/packed-rows.ts`): los nombres una vez y cada lead
+solo con sus valores (~7 MB). El navegador rearma los mismos objetos antes de filtrar o contar. Comprobado con una
+página de prueba en esta versión de Next, por carga directa y por navegación interna: llegan los mismos campos y
+valores, también los que valen `undefined`.
+
+Verificar, en Vercel → Logs, buscando `leads:board-data`: `kb` baja de ~11.000 a ~7.000 en «Por llamar» de una tienda.
+En la pantalla: la lista, sus filtros y conteos son los mismos.
+
+Marcha atrás: revertir el commit. No toca datos.
+
 ### 27-11-2026 · Leads: el tope de 20.000 se avisa y se mide lo que pesa la cola en el navegador (sin migración)
 
 Sin migración, variables ni crons. No cambia qué leads salen ni su orden.

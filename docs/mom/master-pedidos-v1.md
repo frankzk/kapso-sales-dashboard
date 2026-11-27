@@ -9674,6 +9674,12 @@ la mitad de veces.
   llega la cola, el navegador deja `leads:board-data`: cuánto se esperó desde
   que se pidió, cuánto tardó en bajar, cuánto pesa y cuántas filas son. Solo
   números. Es la base para decidir cómo dejar de mandar la cola entera.
+- **La cola viaja como filas (27-11-2026, owner: «sigue con la etapa 2»).**
+  Como lista de objetos, cada lead repetía el nombre de sus 47 campos: el 38 %
+  de lo que viajaba. Ahora los nombres van una sola vez y cada lead lleva solo
+  sus valores (~7 MB por tienda en vez de ~11). El navegador rearma los mismos
+  leads, campo por campo, antes de filtrar o contar: no cambia ninguna regla,
+  ni qué sale, ni su orden. Pruebas: `test/packed-rows.test.ts`.
 
 **Por llamar: nuevos y reintentos en una sola cola (29-10-2026, decisión del owner).**
 La pestaña antes llamada «Sin llamar» se llama **Por llamar**. Las asesoras
