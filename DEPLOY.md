@@ -213,6 +213,16 @@ where courier = 'aliclik' and updated_at > now() - interval '30 minutes';
 
 `solo_por_el_sello` debe quedar en 0 (antes, unas 130 por pasada).
 
+### 26-11-2026 · Correo · Resend: el tema y el segmento se crean al subir, no al guardar la clave (sin migración, MOM §46.4)
+
+Sin migración ni variables. El plan gratis de Resend permite 3 segmentos y Kapta creaba 6 al guardar la clave
+(3 por tienda): Aurela ocupó el cupo y Kenku quedó sin segmentos. Ahora guardar la clave no crea nada; «Subir a
+Resend» crea el tema de esa tienda y el segmento de ese tramo. Lo que alcanzó a crear se guarda aunque Resend
+rechace lo siguiente, y el tope del plan se explica en palabras. El owner sincroniza solo Kenku.
+
+Después del deploy, en Resend → Audience → Segments, borrar los segmentos «Aurela · …» que quedaron del primer
+intento (y el tema «Aurela» en Topics, si no se va a usar), para dejar el cupo a Kenku.
+
 ### 25-11-2026 · Correo · Resend: subir a Resend los clientes que aceptan publicidad (0355, MOM §46)
 
 **Migración 0355_resend_marketing: ya aplicada en producción (25-11-2026), antes del código.** Crea

@@ -247,6 +247,13 @@ export function resendErrorMessage(error: ResendApiError): string {
   if (error.status === 401 || error.status === 403 || name === "invalid_api_key" || name === "missing_api_key") {
     return "Resend no aceptó la clave. Revisa que esté completa y que no la hayas borrado en Resend.";
   }
+  const plan = /plan includes (\d+) segments?/i.exec(error.message ?? "");
+  if (plan) {
+    return (
+      `Tu plan de Resend permite solo ${plan[1]} segmentos y ya están usados. En Resend, Audience › Segments, ` +
+      "borra los que no uses o sube de plan, y vuelve a intentarlo."
+    );
+  }
   if (error.status === 429 || name === "rate_limit_exceeded") {
     return "Resend pidió esperar un momento. Vuelve a intentarlo en un minuto.";
   }

@@ -94,7 +94,7 @@ function KeyCard({ org, writable }: { org: ResendOrgView; writable: boolean }) {
         </div>
         <p className={HELP}>
           En Resend: <strong>API Keys › Create API Key</strong>, permiso <strong>Full access</strong> (la de solo envío no puede
-          subir contactos). Al guardarla, Kapta crea en Resend un tema por marca y sus segmentos.
+          subir contactos). Guardarla no crea nada en Resend: el tema de la tienda y el segmento del tramo se crean cuando subes esa lista.
         </p>
         <FormMessage state={saveState} />
       </form>
@@ -206,9 +206,9 @@ function StoreCard({ org, store, writable }: { org: ResendOrgView; store: Resend
         }
         aside={
           store.topicReady ? (
-            <Badge tone="ok">Lista en Resend</Badge>
+            <Badge tone="ok">Sincronizada</Badge>
           ) : (
-            <Badge tone="neutral">Sin crear en Resend</Badge>
+            <Badge tone="neutral">Sin sincronizar</Badge>
           )
         }
       />

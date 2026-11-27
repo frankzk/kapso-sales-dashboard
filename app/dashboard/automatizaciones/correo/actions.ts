@@ -13,7 +13,7 @@ import { encrypt } from "@/lib/crypto";
 import { hasOrgPermission } from "@/lib/permissions-access";
 import { limaDayOf } from "@/lib/agent-tools";
 import { listResendSegments } from "@/lib/resend-client";
-import { ensureResendSetup, importResendBucket } from "@/lib/resend-marketing-server";
+import { importResendBucket } from "@/lib/resend-marketing-server";
 import {
   RESEND_MIGRATION_MISSING,
   isResendBucket,
@@ -45,7 +45,7 @@ async function requireManager(orgId: string): Promise<{ userId: string } | { err
   return { userId: user.id };
 }
 
-/** «Guardar clave»: la prueba en Resend, la cifra y deja listos el tema y los segmentos de cada tienda. */
+/** «Guardar clave»: la prueba en Resend y la guarda cifrada. No crea nada en Resend. */
 export async function saveResendKey(_prev: ResendFormState, formData: FormData): Promise<ResendFormState> {
   const orgId = String(formData.get("org_id") ?? "");
   const ctx = await requireManager(orgId);
@@ -70,17 +70,11 @@ export async function saveResendKey(_prev: ResendFormState, formData: FormData):
   );
   if (error) return { error: isResendMigrationMissing(error) ? RESEND_MIGRATION_MISSING : `No se guardó: ${error.message}` };
 
-  // Las tiendas que la persona ve (RLS).
-  const sb = await createServerSupabase();
-  const { data: stores } = await sb.from("stores").select("id, name").eq("org_id", orgId).order("name");
-  const setup = await ensureResendSetup(admin, orgId, key, (stores ?? []) as { id: string; name: string }[]);
   revalidatePath(PATH);
-  if (!setup.ok) return { notice: `Clave guardada. No pudimos crear los segmentos todavía: ${setup.error}` };
-  return {
-    notice: setup.value.created
-      ? `Clave guardada. Kapta creó en Resend ${setup.value.created} temas y segmentos (uno por marca y tramo).`
-      : "Clave guardada. Los temas y segmentos de Resend ya estaban listos.",
-  };
+  // Nada se crea en Resend al guardar (26-11-2026): el plan gratis permite 3
+  // segmentos y no toda tienda se sincroniza (owner: «solo vamos a sincronizar
+  // Kenku»). El tema y el segmento de una tienda nacen con su primera subida.
+  return { notice: "Clave guardada. Kapta crea en Resend el tema y el segmento de una tienda cuando subes su primera lista." };
 }
 
 /** «Quitar clave»: Kapta la olvida. En Resend no se borra nada. */

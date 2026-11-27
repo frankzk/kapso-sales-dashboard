@@ -109,6 +109,9 @@ describe("estados, claves y errores", () => {
     expect(resendErrorMessage({ status: 429, name: "rate_limit_exceeded" })).toMatch(/esperar/);
     expect(resendErrorMessage({ status: null, name: "network" })).toMatch(/No pudimos hablar/);
     expect(resendErrorMessage({ status: 422, name: "validation_error", message: "File too large" })).toBe("Resend contestó: File too large");
+    expect(resendErrorMessage({ status: 422, name: "validation_error", message: "Your plan includes 3 segments. Upgrade to add more." })).toMatch(
+      /permite solo 3 segmentos.*Audience › Segments/,
+    );
   });
 
   it("nota la migración que falta", () => {
