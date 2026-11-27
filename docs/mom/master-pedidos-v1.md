@@ -9614,6 +9614,18 @@ la mitad de veces.
   Leads separa `lista` (leer la cola) de `productos` (reconocer el producto de
   cada lead). Pruebas: `test/leads-access.test.ts` y
   `test/lead-routing-board-access.test.ts`.
+- **El producto de cada lead se reconoce sin esperar al catálogo que se
+  renueva (27-11-2026).** Medido el 26-11 con esa misma línea: con la lista ya
+  en ~1,2 s, una de cada tres cargas seguía tardando ~5 s por `productos` (3 a
+  4,5 s). Cada 5 minutos el catálogo de productos se vuelve a pedir a
+  WooCommerce y la carga que coincidía lo esperaba entero. Ahora el tablero usa
+  la última copia completa, de hasta 30 minutos, mientras la nueva se lee por
+  detrás; solo la primera carga de cada servidor la espera. Lo que guarda el
+  producto de un lead (la entrada de mensajes, la revisión de productos, los
+  anuncios asignados a mano) sigue esperando el catálogo vigente: no cambia qué
+  se guarda. Un producto recién publicado en WooCommerce puede tardar unos
+  minutos más en reconocerse en la lista. Pruebas:
+  `test/lead-products-server.test.ts`.
 
 **Por llamar: nuevos y reintentos en una sola cola (29-10-2026, decisión del owner).**
 La pestaña antes llamada «Sin llamar» se llama **Por llamar**. Las asesoras

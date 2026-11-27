@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 vi.mock("@/lib/woocommerce-orders", () => ({ loadStoreOrderPlatform: vi.fn(async () => ({ ok: true, platform: "shopify" })), wooSaleClient: vi.fn() }));
 vi.mock("@/lib/woocommerce", () => ({ wooGetPage: vi.fn() }));
 vi.mock("@/lib/woocommerce-intake", () => ({ withWooAuthFallback: vi.fn() }));
-import { backfillLeadProducts, saveCustomerProducts, withProductOpeners, markProductConversationAttempt, repairSevenProductNames, syncManualAdProductReferences, repairLeadProductReferences } from "@/lib/lead-products-server";
+import { LEAD_CATALOG_MAX_STALE_MS, LEAD_CATALOG_TTL_MS, loadLeadProductCatalog, backfillLeadProducts, saveCustomerProducts, withProductOpeners, markProductConversationAttempt, repairSevenProductNames, syncManualAdProductReferences, repairLeadProductReferences } from "@/lib/lead-products-server";
 import { readFileSync } from "node:fs";
 
 const products = [{ handle: "astaxantina", title: "Astaxantina – Antioxidante" }];
@@ -121,5 +121,124 @@ describe("persistencia e historial de producto", () => {
     fail.rpc.mockResolvedValueOnce({ error: { message: "offline" } } as never);
     await expect(backfillLeadProducts(fail.admin, "store", products)).rejects.toThrow();
     expect(fail.calls.some((call) => call.filters.some((filter) => JSON.stringify(filter).includes('"upsert"')))).toBe(false);
+  });
+});
+
+// Owner, 25-11-2026: «es clave el tiempo de carga del sistema». Medido el 26-11: una de cada tres cargas de Leads
+// tardaba ~5 s porque cada 5 minutos el catálogo se volvía a pedir a WooCommerce y esa carga lo esperaba entero.
+describe("el tablero no espera el catálogo que se renueva", () => {
+  /** Una base cuyo archivo de productos contesta cuando la prueba lo dice. */
+  function slowArchive() {
+    const pending: Array<{ resolve: (rows: unknown[]) => void; reject: (error: Error) => void }> = [];
+    const admin = { from() {
+      const builder = { select: () => builder, eq: () => builder, order: () => builder,
+        range: () => new Promise((resolve) => {
+          pending.push({ resolve: (rows) => resolve({ data: rows, error: null }), reject: () => resolve({ data: null, error: { message: "caído" } }) });
+        }) };
+      return builder;
+    } } as unknown as SupabaseClient;
+    const settle = async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); };
+    return { admin, pending, settle };
+  }
+  const v1 = [{ handle: "astaxantina", title: "Astaxantina" }];
+  const v2 = [{ handle: "astaxantina", title: "Astaxantina" }, { handle: "colageno", title: "Colágeno" }];
+  const handles = (catalogue: { handle: string }[]) => catalogue.map((p) => p.handle);
+
+  it("la primera vez espera; dentro de los 5 minutos no vuelve a leer", async () => {
+    const db = slowArchive();
+    let clock = 1_000_000;
+    const first = loadLeadProductCatalog(db.admin, "stale-a", { allowStale: true, now: () => clock });
+    await db.settle();
+    expect(db.pending).toHaveLength(1);
+    db.pending[0]!.resolve(v1);
+    expect(handles(await first)).toEqual(["astaxantina"]);
+    clock += LEAD_CATALOG_TTL_MS - 1;
+    expect(handles(await loadLeadProductCatalog(db.admin, "stale-a", { allowStale: true, now: () => clock }))).toEqual(["astaxantina"]);
+    expect(db.pending).toHaveLength(1);
+  });
+
+  it("vencido, el tablero usa la copia anterior en el acto y la nueva se lee por detrás", async () => {
+    const db = slowArchive();
+    let clock = 2_000_000;
+    const first = loadLeadProductCatalog(db.admin, "stale-b", { allowStale: true, now: () => clock });
+    await db.settle();
+    db.pending[0]!.resolve(v1);
+    await first;
+    clock += LEAD_CATALOG_TTL_MS;
+    // La nueva lectura queda colgada: el tablero no la espera.
+    expect(handles(await loadLeadProductCatalog(db.admin, "stale-b", { allowStale: true, now: () => clock }))).toEqual(["astaxantina"]);
+    await db.settle();
+    expect(db.pending).toHaveLength(2);
+    // Otra carga mientras tanto tampoco espera ni lanza otra lectura.
+    expect(handles(await loadLeadProductCatalog(db.admin, "stale-b", { allowStale: true, now: () => clock + 1_000 }))).toEqual(["astaxantina"]);
+    expect(db.pending).toHaveLength(2);
+    db.pending[1]!.resolve(v2);
+    await db.settle();
+    expect(handles(await loadLeadProductCatalog(db.admin, "stale-b", { allowStale: true, now: () => clock + 2_000 }))).toEqual(["astaxantina", "colageno"]);
+  });
+
+  it("lo que escribe atribución sigue esperando el catálogo vigente", async () => {
+    const db = slowArchive();
+    let clock = 3_000_000;
+    const first = loadLeadProductCatalog(db.admin, "stale-c", { now: () => clock });
+    await db.settle();
+    db.pending[0]!.resolve(v1);
+    await first;
+    clock += LEAD_CATALOG_TTL_MS;
+    let done = false;
+    const fresh = loadLeadProductCatalog(db.admin, "stale-c", { now: () => clock }).then((value) => { done = true; return value; });
+    await db.settle();
+    expect(done).toBe(false);
+    db.pending[1]!.resolve(v2);
+    expect(handles(await fresh)).toEqual(["astaxantina", "colageno"]);
+  });
+
+  it("una copia de más de 30 minutos no se usa: se espera la nueva", async () => {
+    const db = slowArchive();
+    let clock = 4_000_000;
+    const first = loadLeadProductCatalog(db.admin, "stale-d", { allowStale: true, now: () => clock });
+    await db.settle();
+    db.pending[0]!.resolve(v1);
+    await first;
+    expect(LEAD_CATALOG_MAX_STALE_MS).toBe(30 * 60_000);
+    clock += LEAD_CATALOG_MAX_STALE_MS;
+    let done = false;
+    const fresh = loadLeadProductCatalog(db.admin, "stale-d", { allowStale: true, now: () => clock }).then((value) => { done = true; return value; });
+    await db.settle();
+    expect(done).toBe(false);
+    db.pending[1]!.resolve(v2);
+    expect(handles(await fresh)).toEqual(["astaxantina", "colageno"]);
+  });
+
+  it("si la lectura nueva falla, el tablero sigue con la anterior y la siguiente carga reintenta", async () => {
+    const db = slowArchive();
+    let clock = 5_000_000;
+    const first = loadLeadProductCatalog(db.admin, "stale-e", { allowStale: true, now: () => clock });
+    await db.settle();
+    db.pending[0]!.resolve(v1);
+    await first;
+    clock += LEAD_CATALOG_TTL_MS;
+    expect(handles(await loadLeadProductCatalog(db.admin, "stale-e", { allowStale: true, now: () => clock }))).toEqual(["astaxantina"]);
+    await db.settle();
+    db.pending[1]!.reject(new Error("caído"));
+    await db.settle();
+    // Quien sí espera el catálogo ve el error, como antes.
+    const strict = loadLeadProductCatalog(db.admin, "stale-e", { now: () => clock + 10 });
+    await db.settle();
+    db.pending[2]!.reject(new Error("caído"));
+    await expect(strict).rejects.toThrow("No se pudo leer el catálogo de atribución.");
+    // El tablero sigue pintando con la copia buena y vuelve a intentar.
+    expect(handles(await loadLeadProductCatalog(db.admin, "stale-e", { allowStale: true, now: () => clock + 20 }))).toEqual(["astaxantina"]);
+    await db.settle();
+    expect(db.pending).toHaveLength(4);
+  });
+
+  it("solo la proyección del tablero lo pide; nadie que escriba", () => {
+    const src = readFileSync("lib/lead-products-server.ts", "utf8");
+    expect(src.match(/allowStale: true/g)?.length).toBe(1);
+    expect(src).toContain("const catalogue = await loadLeadProductCatalog(admin, id, { allowStale: true });");
+    for (const path of ["lib/leads-ingest.ts", "app/dashboard/actions.ts", "app/api/internal/leads/product-review/route.ts"]) {
+      expect(readFileSync(path, "utf8"), path).not.toContain("allowStale");
+    }
   });
 });

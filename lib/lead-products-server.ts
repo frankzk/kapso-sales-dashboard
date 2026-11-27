@@ -6,7 +6,19 @@ import { withWooAuthFallback } from "./woocommerce-intake";
 import { SEVEN_PRODUCT_REPAIR_QUERIES } from "./lead-products";
 import { productReferenceResolver } from "./lead-product-references";
 
-const cache = new Map<string, { at: number; promise: Promise<LeadCatalogProduct[]> }>();
+/** Cuánto vale una lectura del catálogo antes de volver a leerlo. */
+export const LEAD_CATALOG_TTL_MS = 300_000;
+/**
+ * Hasta qué edad el tablero puede usar la última copia completa mientras la
+ * nueva se lee por detrás (`allowStale`). Más vieja, se espera la nueva.
+ */
+export const LEAD_CATALOG_MAX_STALE_MS = 30 * 60_000;
+
+type CatalogRead = { at: number; promise: Promise<LeadCatalogProduct[]>; done: boolean };
+/** La lectura vigente (o en curso) de cada tienda. */
+const cache = new Map<string, CatalogRead>();
+/** La última lectura que terminó bien, por tienda, con la hora en que empezó. */
+const lastGood = new Map<string, { at: number; value: LeadCatalogProduct[] }>();
 
 const MANUAL_AD_IMPORT = "Importación de producto asignado manualmente en Consolidado; SKU exacto; vigente desde su guardado.";
 
@@ -126,7 +138,8 @@ export async function withProductOpeners<T extends { store_id: string; first_inb
   const identities = new Map<string, Map<string, LeadCatalogProduct>>();
   await Promise.all([...new Set(leads.map((l) => l.store_id))].map(async (id) => {
     try {
-      const catalogue = await loadLeadProductCatalog(admin, id);
+      // Solo pinta: puede usar la última copia mientras la nueva se lee por detrás.
+      const catalogue = await loadLeadProductCatalog(admin, id, { allowStale: true });
       matchers.set(id, buildProductMatcher(catalogue));
       const handles = new Map<string, LeadCatalogProduct>();
       for (const p of catalogue) for (const h of [p.handle, ...p.handles ?? []]) handles.set(h.toLowerCase(), p);
@@ -159,43 +172,77 @@ export async function withProductOpeners<T extends { store_id: string; first_inb
       cart_product_handle: productOf(l.cart_product_handle)?.handle ?? l.cart_product_handle };
   });
 }
-/** Store-scoped catalogue; no order history, bot suggestions or ad headlines. */
-export async function loadLeadProductCatalog(admin: SupabaseClient, storeId: string): Promise<LeadCatalogProduct[]> {
-  const hit = cache.get(storeId);
-  if (hit && Date.now() - hit.at < 300_000) return hit.promise;
-  const promise = (async () => {
-    const products = new Map<string, LeadCatalogProduct>();
-    for (let page = 0; page < 30; page++) {
-      const { data, error } = await admin.from("shopify_history_products").select("handle,title,variants")
-        .eq("store_id", storeId).eq("status", "active").order("handle").range(page * 1000, page * 1000 + 999);
-      if (error) throw new Error("No se pudo leer el catálogo de atribución.");
-      for (const p of data ?? []) if (p.handle && p.title) products.set(p.handle, {
-        handle: p.handle, title: p.title,
-        skus: Array.isArray(p.variants) ? p.variants.map((v: { sku?: string }) => v.sku?.trim().toUpperCase() ?? "").filter(Boolean) : [],
-      });
-      if ((data ?? []).length < 1000) break;
-      if (page === 29) throw new Error("El archivo de productos está incompleto.");
-    }
-    const platform = await loadStoreOrderPlatform(admin, storeId);
-    const live: LeadCatalogProduct[] = [];
-    if (!platform.ok) throw new Error("No se pudo leer la plataforma del catálogo.");
-    if (platform.platform === "woocommerce") {
-      const client = wooSaleClient(platform.creds, { timeoutMs: 10_000 });
-      for (let page = 1; page <= 30; page++) {
-        const result = await withWooAuthFallback(client, (opts) => wooGetPage<{ id: number; slug: string; name: string; sku: string }>(opts,
-          "/products", { status: "publish", per_page: 100, page, _fields: "id,slug,name,sku", orderby: "id", order: "asc" }));
-        for (const p of result.value.items) if (p.slug && p.name) {
-          live.push({ handle: p.slug, title: p.name, wooProductIds: [String(p.id)], skus: p.sku ? [p.sku.trim().toUpperCase()] : [] });
-        }
-        if (result.value.items.length < 100 || (result.value.totalPages != null && page >= result.value.totalPages)) break;
-        if (page === 30) throw new Error("El catálogo de atribución está incompleto.");
+/**
+ * El catálogo de atribución de una tienda: el archivo de Shopify y, si la tienda
+ * vende por WooCommerce, sus productos publicados (sin historial de pedidos, sin
+ * sugerencias del bot ni títulos de anuncios). Se guarda 5 minutos por tienda.
+ *
+ * `allowStale` (solo lecturas de pantalla, 27-11-2026). Medido el 26-11 con la
+ * línea `[leads] carga`: una de cada tres cargas de Leads tardaba ~5 s en vez de
+ * ~1,8 s, y lo que pesaba era `productos` (3 a 4,5 s): cada 5 minutos el catálogo
+ * se volvía a pedir a WooCommerce, página por página, y la carga que coincidía lo
+ * esperaba entero. Con `allowStale` se usa la última copia completa (hasta
+ * `LEAD_CATALOG_MAX_STALE_MS`) mientras la nueva se lee por detrás. Lo que
+ * escribe atribución (la entrada de mensajes, la revisión de productos, los
+ * anuncios asignados a mano) no lo pasa: sigue esperando el catálogo vigente.
+ */
+export async function loadLeadProductCatalog(admin: SupabaseClient, storeId: string,
+  opts: { allowStale?: boolean; now?: () => number } = {}): Promise<LeadCatalogProduct[]> {
+  const now = opts.now ?? Date.now;
+  const at = now();
+  let read = cache.get(storeId);
+  if (!read || at - read.at >= LEAD_CATALOG_TTL_MS) read = startCatalogRead(admin, storeId, at);
+  if (opts.allowStale && !read.done) {
+    const good = lastGood.get(storeId);
+    if (good && at - good.at < LEAD_CATALOG_MAX_STALE_MS) return good.value;
+  }
+  return read.promise;
+}
+
+function startCatalogRead(admin: SupabaseClient, storeId: string, at: number): CatalogRead {
+  const read: CatalogRead = { at, promise: readLeadProductCatalog(admin, storeId), done: false };
+  cache.set(storeId, read);
+  read.promise.then(
+    (value) => {
+      read.done = true;
+      const previous = lastGood.get(storeId);
+      if (!previous || previous.at <= read.at) lastGood.set(storeId, { at: read.at, value });
+    },
+    // Una lectura que falló no se guarda; la última buena se queda para el tablero.
+    () => { if (cache.get(storeId) === read) cache.delete(storeId); },
+  );
+  return read;
+}
+
+async function readLeadProductCatalog(admin: SupabaseClient, storeId: string): Promise<LeadCatalogProduct[]> {
+  const products = new Map<string, LeadCatalogProduct>();
+  for (let page = 0; page < 30; page++) {
+    const { data, error } = await admin.from("shopify_history_products").select("handle,title,variants")
+      .eq("store_id", storeId).eq("status", "active").order("handle").range(page * 1000, page * 1000 + 999);
+    if (error) throw new Error("No se pudo leer el catálogo de atribución.");
+    for (const p of data ?? []) if (p.handle && p.title) products.set(p.handle, {
+      handle: p.handle, title: p.title,
+      skus: Array.isArray(p.variants) ? p.variants.map((v: { sku?: string }) => v.sku?.trim().toUpperCase() ?? "").filter(Boolean) : [],
+    });
+    if ((data ?? []).length < 1000) break;
+    if (page === 29) throw new Error("El archivo de productos está incompleto.");
+  }
+  const platform = await loadStoreOrderPlatform(admin, storeId);
+  const live: LeadCatalogProduct[] = [];
+  if (!platform.ok) throw new Error("No se pudo leer la plataforma del catálogo.");
+  if (platform.platform === "woocommerce") {
+    const client = wooSaleClient(platform.creds, { timeoutMs: 10_000 });
+    for (let page = 1; page <= 30; page++) {
+      const result = await withWooAuthFallback(client, (opts) => wooGetPage<{ id: number; slug: string; name: string; sku: string }>(opts,
+        "/products", { status: "publish", per_page: 100, page, _fields: "id,slug,name,sku", orderby: "id", order: "asc" }));
+      for (const p of result.value.items) if (p.slug && p.name) {
+        live.push({ handle: p.slug, title: p.name, wooProductIds: [String(p.id)], skus: p.sku ? [p.sku.trim().toUpperCase()] : [] });
       }
+      if (result.value.items.length < 100 || (result.value.totalPages != null && page >= result.value.totalPages)) break;
+      if (page === 30) throw new Error("El catálogo de atribución está incompleto.");
     }
-    return mergeLeadProductCatalog([...products.values()], live);
-  })();
-  cache.set(storeId, { at: Date.now(), promise });
-  promise.catch(() => { if (cache.get(storeId)?.promise === promise) cache.delete(storeId); });
-  return promise;
+  }
+  return mergeLeadProductCatalog([...products.values()], live);
 }
 
 export async function saveCustomerProducts(admin: SupabaseClient, storeId: string, conversationId: string,
