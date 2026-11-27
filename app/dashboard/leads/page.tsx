@@ -8,10 +8,10 @@ import {
   getLeadPriorCoverage,
   getLeadShopifyLocations,
   getLeadQueueSnapshot,
-  getStoreLeads,
   leadsViewLimit,
   type LeadView,
   type StoreScope,
+  getStoreLeadsRead,
 } from "@/lib/leads-access";
 import {
   activeClaimHolders,
@@ -150,8 +150,10 @@ async function LeadsContent({
   // mismo universo que el gráfico; las demás vistas mantienen el tope estándar.
   // Dos tiempos (25-11-2026): `lista` es leer la cola y `productos` reconocer el
   // producto de cada lead. Iban sumados y no se sabía cuál pesaba.
-  const leadsPromise = load.timed("lista", getStoreLeads(scope, view, leadsViewLimit(view)))
-    .then((rows) => load.timed("productos", withProductOpeners(createAdminSupabase(), rows)));
+  // `capped`: la lectura llegó al tope de 20.000 filas (27-11-2026); la pantalla lo avisa.
+  const readPromise = load.timed("lista", getStoreLeadsRead(scope, view, leadsViewLimit(view)));
+  const leadsPromise = readPromise
+    .then(({ rows }) => load.timed("productos", withProductOpeners(createAdminSupabase(), rows)));
   const userPromise = getCurrentUser();
   // El siguiente lead (MOM §11) se reserva solo a quien vende: quien solo
   // supervisa la cola no retiene leads por mirarla.
@@ -226,7 +228,8 @@ async function LeadsContent({
   // Sin la 0354 todavía, la cuenta queda en 0 y no se muestra.
   const { count: socialPending } = await createAdminSupabase().from("social_threads")
     .select("id", { count: "exact", head: true }).in("store_id", scope).eq("status", "abierto").eq("last_direction", "in");
-  load.done({ filas: leads.length });
+  const { capped: queueCapped } = await readPromise;
+  load.done({ filas: leads.length, ...(queueCapped ? { tope: 1 } : {}) });
   const storeOrg = new Map(stores.map((s) => [s.id, s.org_id]));
   const markedLeads = withListaNegra(leads, listaNegra, storeOrg, (l) => l.phone);
 
@@ -262,6 +265,7 @@ async function LeadsContent({
       canHoldNext={roles.includes("vendedora")}
       socialPending={socialPending ?? 0}
       leadsComplete={leadsViewLimit(view) === null}
+      queueCapped={queueCapped}
     />
   );
 }

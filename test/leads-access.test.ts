@@ -14,6 +14,7 @@ vi.mock("@/lib/db", () => ({
 import {
   getLeadQueueSnapshot,
   getStoreLeads,
+  getStoreLeadsRead,
   handoffFreshCutoffIso,
   HANDOFF_FRESH_HOURS,
   sortPorLlamar,
@@ -281,6 +282,24 @@ describe("getStoreLeads «Por llamar»: por clave y en tramos de ids a la vez", 
     expect(rows).toHaveLength(20_000);
     expect(rows.map((l) => l.id)).toEqual(sorted.slice(0, 20_000).map((l) => l.id));
   });
+
+  // 27-11-2026: al llegar al tope faltan leads cualesquiera (los ids son al azar), y nadie lo sabía.
+  it("la lectura dice si llegó al tope, para que la pantalla lo avise", async () => {
+    const full = DIGITS.flatMap((digit) => Array.from({ length: 1600 }, (_, n) => ({ id: uuid(digit, n) })));
+    mockKeysetLeads(full);
+    const capped = await getStoreLeadsRead(["kenku-peru"], "por_llamar", null);
+    expect(capped.capped).toBe(true);
+    expect(capped.rows).toHaveLength(20_000);
+    const small = DIGITS.flatMap((digit) => Array.from({ length: 40 }, (_, n) => ({ id: uuid(digit, n) })));
+    mockKeysetLeads(small);
+    const read = await getStoreLeadsRead(["kenku-peru"], "por_llamar", null);
+    expect(read).toMatchObject({ capped: false });
+    expect(read.rows).toHaveLength(640);
+    // `getStoreLeads` sigue devolviendo solo las filas.
+    mockKeysetLeads(small);
+    expect(await getStoreLeads(["kenku-peru"], "por_llamar", null)).toHaveLength(640);
+    expect(await getStoreLeadsRead([], "por_llamar", null)).toEqual({ rows: [], capped: false });
+  });
 });
 
 describe("«Por llamar» en tramos: lo que no puede cambiar sin querer", () => {
@@ -291,8 +310,20 @@ describe("«Por llamar» en tramos: lo que no puede cambiar sin querer", () => {
     expect(src).toContain("const early = limit === null ? drainAll() : null;");
     // El reparto se espera siempre antes de devolver algo: si falla, falla la función.
     expect(src.indexOf("const routing = await routingRead;")).toBeGreaterThan(src.indexOf("const early = limit === null ? drainAll() : null;"));
-    expect(src).toContain("const all = await (early ?? drainAll());");
+    expect(src).toContain("const { rows: all, capped } = await (early ?? drainAll());");
     expect(src).toContain("let visible = filterRoutedLeads(all, routing);");
+  });
+
+  it("el tope se avisa en la pantalla y en la línea de carga", () => {
+    expect(src).toContain("const LEADS_PAGE_CAP = 20_000;");
+    expect(src).toContain("return { rows: rows.slice(0, LEADS_PAGE_CAP), firstReadFailed, capped: rows.length >= LEADS_PAGE_CAP };");
+    expect(src).toContain("return { rows, capped: rows.length >= LEADS_PAGE_CAP };");
+    const page = readFileSync(join(process.cwd(), "app/dashboard/leads/page.tsx"), "utf8");
+    expect(page).toContain("queueCapped={queueCapped}");
+    const board = readFileSync(join(process.cwd(), "components/leads.tsx"), "utf8");
+    // El texto dice el mismo número que el tope.
+    expect(board).toContain("Esta vista pasó de 20.000 leads: algunos no aparecen en la lista ni en los conteos.");
+    expect(board).toContain("{queueCapped && (");
   });
 
   it("el MOM dice cómo se lee la cola y que nada cambia para la asesora", () => {

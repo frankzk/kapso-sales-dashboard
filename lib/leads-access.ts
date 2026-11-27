@@ -181,7 +181,22 @@ export async function getStoreLeads(
   view: LeadView,
   limit: number | null = LEADS_VIEW_LIMIT,
 ): Promise<LeadRow[]> {
-  if (!storeIds.length) return [];
+  return (await getStoreLeadsRead(storeIds, view, limit)).rows;
+}
+
+/**
+ * Como `getStoreLeads`, y además dice si la lectura llegó al tope de
+ * `LEADS_PAGE_CAP` filas (27-11-2026). Al llegar, los leads que pasan el tope
+ * quedan fuera de la lista y de sus conteos, y los ids son al azar: no son los
+ * más viejos, son unos cualesquiera. Antes pasaba sin que nadie lo supiera; la
+ * pantalla lo avisa y la línea `[leads] carga` lo cuenta (`tope`).
+ */
+export async function getStoreLeadsRead(
+  storeIds: StoreScope,
+  view: LeadView,
+  limit: number | null = LEADS_VIEW_LIMIT,
+): Promise<{ rows: LeadRow[]; capped: boolean }> {
+  if (!storeIds.length) return { rows: [], capped: false };
   const sb = await createServerSupabase();
   const routingRead = getLeadRoutingScope(storeIds);
   const buildQuery = (select: string = LEAD_BOARD_SELECT, count?: "exact") => {
@@ -265,16 +280,16 @@ export async function getStoreLeads(
       res = await buildQuery(select).limit(limit);
     }
     const limited = (res.data as unknown as LeadRow[]) ?? [];
-    if (pendingIndex) return withPendingVoucherLeads(sb, storeIds, limited, select, await pendingIndex);
-    return view === "por_llamar" ? sortPorLlamar(limited) : limited;
+    if (pendingIndex) return { rows: await withPendingVoucherLeads(sb, storeIds, limited, select, await pendingIndex), capped: false };
+    return { rows: view === "por_llamar" ? sortPorLlamar(limited) : limited, capped: false };
   }
   // «Por llamar» ordena solo por `id`: se drena por clave (`id > último`).
   // Las demás vistas ordenan por otra columna y siguen con rangos.
-  const all = await (early ?? drainAll());
+  const { rows: all, capped } = await (early ?? drainAll());
   let visible = filterRoutedLeads(all, routing);
   if (view === "handoff") visible = filterRoutedLeads(await withPendingVoucherLeads(sb, storeIds, visible, LEAD_BOARD_SELECT, await loadPendingVouchers(sb, storeIds)), routing);
   const sorted = view === "por_llamar" ? sortPorLlamar(visible) : visible;
-  return limit === null ? sorted : sorted.slice(0, limit);
+  return { rows: limit === null ? sorted : sorted.slice(0, limit), capped };
 }
 
 /**
@@ -370,17 +385,17 @@ export const LEAD_DRAIN_CONCURRENCY = 8;
 async function drainLeadsById(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   buildQuery: (select?: string, count?: "exact") => any,
-): Promise<LeadRow[]> {
+): Promise<{ rows: LeadRow[]; capped: boolean }> {
   const drained = await drainLeadSlices(buildQuery, LEAD_BOARD_SELECT);
-  if (!drained.firstReadFailed) return drained.rows;
-  return (await drainLeadSlices(buildQuery, LEAD_BOARD_SELECT_LEGACY)).rows;
+  const done = drained.firstReadFailed ? await drainLeadSlices(buildQuery, LEAD_BOARD_SELECT_LEGACY) : drained;
+  return { rows: done.rows, capped: done.capped };
 }
 
 async function drainLeadSlices(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   buildQuery: (select?: string, count?: "exact") => any,
   select: string,
-): Promise<{ rows: LeadRow[]; firstReadFailed: boolean }> {
+): Promise<{ rows: LeadRow[]; firstReadFailed: boolean; capped: boolean }> {
   const bounds: Array<string | null> = [null, ...LEAD_ID_SLICE_STARTS, null];
   const slices: Array<LeadRow[] | null> = new Array(bounds.length - 1).fill(null);
   let fetched = 0;
@@ -424,10 +439,19 @@ async function drainLeadSlices(
     rows.push(...slice);
     if (failedSlice !== null && index >= failedSlice) break;
   }
-  return { rows: rows.slice(0, LEADS_PAGE_CAP), firstReadFailed };
+  // Con el tope leído (o justo en él) puede haber más: se avisa, aunque falte uno solo.
+  return { rows: rows.slice(0, LEADS_PAGE_CAP), firstReadFailed, capped: rows.length >= LEADS_PAGE_CAP };
 }
 
 async function drainLeads(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  buildQuery: (select?: string, count?: "exact") => any,
+): Promise<{ rows: LeadRow[]; capped: boolean }> {
+  const rows = await drainLeadsByRange(buildQuery);
+  return { rows, capped: rows.length >= LEADS_PAGE_CAP };
+}
+
+async function drainLeadsByRange(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   buildQuery: (select?: string, count?: "exact") => any,
 ): Promise<LeadRow[]> {
