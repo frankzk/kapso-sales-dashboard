@@ -2686,6 +2686,15 @@ export function OrderDrawer({
                         {detail.origin.evidence.join(" · ")}
                       </dd>
                     )}
+                    {/* De dónde llegó la clienta, por las marcas del enlace (MOM §3,
+                        «Llegó por», 27-11-2026): el correo, un anuncio de Meta… */}
+                    {detail.origin.arrival && (
+                      <dd className="mt-1.5 text-[13px] leading-5 text-ink-700" title={detail.origin.arrival.evidence}>
+                        <span className="text-ink-500">Llegó por </span>
+                        <span className="font-medium text-ink-900">{detail.origin.arrival.label}</span>
+                        <span className="block text-[12px] leading-4 text-ink-500">{detail.origin.arrival.evidence}</span>
+                      </dd>
+                    )}
                   </div>
                   <Field label="Courier actual" value={detail.row.current_courier} capitalize />
                   <Field label="Guía actual" value={detail.row.guide_code} mono />

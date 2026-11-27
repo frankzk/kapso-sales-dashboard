@@ -54,6 +54,21 @@ export interface OrderOriginRawFacts {
   kaptaChannel: string | null;
   /** `raw.source_name` de Shopify REST (`web`, `shopify_draft_order`, el id de una app). */
   sourceName: string | null;
+  /**
+   * Las marcas del enlace por el que llegó la clienta (`utm_*`), de los
+   * atributos del pedido (en WooCommerce, la atribución `_wc_order_attribution_utm_*`
+   * que `wooNoteAttributes` copia como `utm_*`) o, en Shopify, de `landing_site`.
+   * null = no trae ninguna.
+   */
+  utm: OrderUtm | null;
+}
+
+export interface OrderUtm {
+  source: string | null;
+  medium: string | null;
+  campaign: string | null;
+  content: string | null;
+  id: string | null;
 }
 
 export interface OrderOrigin {
@@ -61,15 +76,50 @@ export interface OrderOrigin {
   label: string;
   /** De dónde se dedujo, una pista por señal. */
   evidence: string[];
+  /**
+   * De dónde llegó la clienta, si el enlace traía marca (27-11-2026, owner: «haz
+   * que Kapta muestre el origen del correo»): «Correo · black_friday_2026»,
+   * «Anuncio de Meta · CBO Cayenne Pepper | 0608». No cambia `label`: uno dice
+   * por dónde se creó el pedido y el otro por dónde entró la clienta.
+   */
+  arrival?: OrderArrival | null;
+}
+
+export interface OrderArrival {
+  kind: "correo" | "meta" | "tiktok" | "google" | "otro";
+  label: string;
+  /** Las marcas tal cual: «utm_source = resend · utm_medium = email · …». */
+  evidence: string;
 }
 
 const text = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
+
+const UTM_KEYS = ["source", "medium", "campaign", "content", "id"] as const;
+
+/** Las `utm_*` de la URL de entrada de Shopify (`landing_site`: «/?utm_source=…»). */
+function utmFromLandingSite(landing: string | null): Partial<Record<(typeof UTM_KEYS)[number], string>> {
+  if (!landing || !landing.includes("utm_")) return {};
+  const q = landing.indexOf("?");
+  if (q < 0) return {};
+  const out: Partial<Record<(typeof UTM_KEYS)[number], string>> = {};
+  try {
+    const params = new URLSearchParams(landing.slice(q + 1));
+    for (const k of UTM_KEYS) {
+      const v = text(params.get(`utm_${k}`));
+      if (v) out[k] = v;
+    }
+  } catch {
+    return {};
+  }
+  return out;
+}
 
 /** Lee de `orders.raw` las señales de origen. Tolera cualquier forma (o nada). */
 export function orderOriginRawFacts(raw: unknown): OrderOriginRawFacts {
   const r = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   const woo = r.woo && typeof r.woo === "object" ? (r.woo as Record<string, unknown>) : {};
   let kaptaChannel: string | null = null;
+  const utm: Partial<Record<(typeof UTM_KEYS)[number], string>> = {};
   // REST: note_attributes [{name,value}]; GraphQL: customAttributes [{key,value}].
   for (const list of [r.note_attributes, r.customAttributes]) {
     if (!Array.isArray(list)) continue;
@@ -77,16 +127,79 @@ export function orderOriginRawFacts(raw: unknown): OrderOriginRawFacts {
       if (!a || typeof a !== "object") continue;
       const attr = a as Record<string, unknown>;
       const name = (text(attr.name) ?? text(attr.key) ?? "").toLowerCase().replace(/^_/, "");
-      if (name === "kapta_channel") kaptaChannel = text(attr.value)?.toLowerCase() ?? null;
+      if (name === "kapta_channel" && !kaptaChannel) kaptaChannel = text(attr.value)?.toLowerCase() ?? null;
+      const k = name.startsWith("utm_") ? name.slice(4) : null;
+      if (k && (UTM_KEYS as readonly string[]).includes(k)) {
+        const v = text(attr.value);
+        if (v && !utm[k as (typeof UTM_KEYS)[number]]) utm[k as (typeof UTM_KEYS)[number]] = v;
+      }
     }
-    if (kaptaChannel) break;
   }
+  for (const [k, v] of Object.entries(utmFromLandingSite(text(r.landing_site)))) {
+    if (!utm[k as (typeof UTM_KEYS)[number]]) utm[k as (typeof UTM_KEYS)[number]] = v;
+  }
+  const hasUtm = UTM_KEYS.some((k) => utm[k]);
   return {
     wooCreatedVia: text(woo.created_via)?.toLowerCase() ?? null,
     wooPaymentMethod: text(woo.payment_method)?.toLowerCase() ?? null,
     kaptaChannel,
     sourceName: text(r.source_name),
+    utm: hasUtm
+      ? {
+          source: utm.source ?? null,
+          medium: utm.medium ?? null,
+          campaign: utm.campaign ?? null,
+          content: utm.content ?? null,
+          id: utm.id ?? null,
+        }
+      : null,
   };
+}
+
+/** Quien envía correos de marketing: su nombre en `utm_source` basta. */
+const EMAIL_SOURCES = new Set(["resend", "klaviyo", "mailchimp", "brevo", "sendinblue", "email", "newsletter"]);
+
+/** «CBO+Cayenne+Pepper+|+0608» → «CBO Cayenne Pepper | 0608». */
+function utmText(v: string | null): string | null {
+  if (!v) return null;
+  let out = v.replace(/\+/g, " ");
+  try {
+    out = decodeURIComponent(out);
+  } catch {
+    /* tal cual */
+  }
+  out = out.replace(/\s+/g, " ").trim();
+  return out ? (out.length > 70 ? `${out.slice(0, 69)}…` : out) : null;
+}
+
+/**
+ * De dónde llegó la clienta, por las marcas del enlace (MOM §3, «Llegó por»).
+ * Correo: `utm_medium = email` o una fuente de correo (Resend…). Meta: `fb`,
+ * `facebook`, `ig`, `instagram` o una ubicación de Meta (Facebook_Mobile_Feed…)
+ * en la fuente, el medio o el contenido. TikTok y Google por su nombre. Lo
+ * demás, la fuente tal cual. Sin marcas, null.
+ */
+export function orderArrival(utm: OrderUtm | null): OrderArrival | null {
+  if (!utm) return null;
+  const evidence = UTM_KEYS.filter((k) => utm[k])
+    .map((k) => `utm_${k} = ${utmText(utm[k])}`)
+    .join(" · ");
+  const low = (v: string | null) => (v ?? "").toLowerCase();
+  const source = low(utm.source);
+  const medium = low(utm.medium);
+  const all = `${source} ${medium} ${low(utm.content)}`;
+  const campaign = utmText(utm.campaign);
+  const withCampaign = (base: string) => (campaign ? `${base} · ${campaign}` : base);
+  if (/(^|[^a-z])e-?mail([^a-z]|$)|newsletter/.test(medium) || EMAIL_SOURCES.has(source)) {
+    return { kind: "correo", label: withCampaign("Correo"), evidence };
+  }
+  if (/tiktok/.test(all)) return { kind: "tiktok", label: withCampaign("Anuncio de TikTok"), evidence };
+  if (/^(fb|ig|meta)$/.test(source) || /facebook|instagram|messenger|audience_network/.test(all)) {
+    return { kind: "meta", label: withCampaign("Anuncio de Meta"), evidence };
+  }
+  if (/google|youtube/.test(source) || medium === "cpc") return { kind: "google", label: withCampaign("Google"), evidence };
+  const src = utmText(utm.source);
+  return { kind: "otro", label: withCampaign(src ?? "Enlace con marca"), evidence };
 }
 
 /** `created_via` de un pedido cargado a mano en wp-admin (no es un rol de Kapta). */
@@ -103,8 +216,13 @@ const WOO_VIA: Record<string, string> = {
   "store-api": "el checkout de WooCommerce",
 };
 
-/** El origen del pedido. Nunca falla: sin señales, «Sin marca». */
+/** El origen del pedido y por dónde llegó la clienta. Nunca falla: sin señales, «Sin marca». */
 export function orderOrigin(f: OrderOriginFacts): OrderOrigin {
+  return { ...orderCreationOrigin(f), arrival: orderArrival(f.raw.utm ?? null) };
+}
+
+/** Por dónde se creó el pedido (la regla de 30-10-2026). */
+function orderCreationOrigin(f: OrderOriginFacts): OrderOrigin {
   const ev: string[] = [];
   const { raw } = f;
   const woo = f.platform === "woocommerce";

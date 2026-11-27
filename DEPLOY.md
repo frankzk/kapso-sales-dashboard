@@ -85,6 +85,20 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 27-11-2026 · La ficha dice por dónde llegó la clienta: «Llegó por · Correo · black_friday_2026» (sin migración, MOM §3)
+
+Debajo de «Origen», el cajón del Master muestra **Llegó por**, leído de las
+`utm_*` del pedido (atributos de WooCommerce o Shopify, o la URL de entrada en
+Shopify): correo, anuncio de Meta, de TikTok, Google o la fuente tal cual, con
+la campaña. Sin marcas no aparece. No cambia «Origen» ni ningún canal.
+
+- Código: `lib/order-origin.ts` (`orderArrival`, `utm` en
+  `orderOriginRawFacts`) y `components/order-drawer.tsx`. Lee `raw`, que el
+  detalle ya traía: ninguna consulta nueva.
+- Pruebas: `test/order-origin.test.ts` («Llegó por»).
+- Verificación en producción: abrir #KP209492 o #KP209504 → «Llegó por Correo ·
+  black_friday_2026».
+
 ### 27-11-2026 · Leads: la cola viaja como filas, 38 % más liviana (sin migración, etapa 2)
 
 Sin migración, variables ni crons. No cambia ninguna regla ni lo que se ve.
