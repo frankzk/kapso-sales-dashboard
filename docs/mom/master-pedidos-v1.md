@@ -12565,6 +12565,46 @@ el registro lo muestra como «Automático».
 brazo: A por su guía Swayp; B por el Master (entregado por quien sea, o cerrado
 sin entrega). La simulación muestra qué saldría hoy sin enviar nada.
 
+### 11.14 Pedido nuevo: primero Swayp (27-11-2026)
+
+Decisión del owner: «queremos poner de primera opcion a los pedidos nuevos de
+cuando tenemos el stock commpleto en Swayp, la opcion que es si no se entrega,
+regresa a "Por confimar"» y «que se bloquee Aliclik como primera opcion para
+estos pedidos. La idea es darle pedidos nuevos y limpios a Swayp». La opción es
+«Enviar por Swayp» desde Por confirmar (§11.11). Con sus respuestas del mismo
+día:
+
+- **Pedido nuevo** es la primera salida y 48 h o menos desde que se creó: un
+  pedido de **provincia COD** en **Por confirmar** (no «Swayp no entregó»), sin
+  ninguna guía todavía, con **stock completo en Swayp**: cobertura, todos sus
+  productos vinculados en Catálogo y con stock en la bodega (la misma lectura
+  de la tarjeta de Swayp de la Mesa de ruta, no el filtro «Swayp» del Master,
+  que aprueba con un solo producto y se calcula cada hora). La regla es
+  `swaypPrimero` (`lib/swayp-desde-confirmacion-offer.ts`).
+- **Aliclik deja de ser la sugerencia, sin bloquearse** («Solo sugerencia»).
+  En la Mesa de ruta, Swayp va primero con «Sugerido» y el botón «Enviar por
+  Swayp»: «Pedido nuevo con stock completo en <ciudad>: sale sin confirmar y,
+  si Swayp no lo entrega, vuelve a Por confirmar.». Aliclik va segundo, se
+  puede elegir igual: «Pedido nuevo con stock completo en Swayp: la sugerencia
+  es Swayp. Aliclik se puede elegir igual, y es la ruta si Swayp no lo
+  entrega.».
+- **Lo envía la asesora, con el botón.** En la mesa de confirmación el bloque
+  va arriba, antes de las llamadas, con el botón principal: «Pedido nuevo:
+  primero Swayp» y «Swayp tiene stock de todo el pedido. Sale sin confirmar; si
+  Swayp no lo entrega, vuelve a Por confirmar para llamarlo y sacarlo por
+  Aliclik.». En Leads, después de «Generar pedido» (§25.2), «Swayp hoy» va
+  primero y se abre sola. El automático de §11.13 sigue como estaba (apagado).
+- **La tarjeta de Swayp de la Mesa de ruta** abre, en estos pedidos, el mismo
+  «Enviar por Swayp» desde Por confirmar: graba `swayp_desde_por_confirmar` y,
+  si Swayp no entrega, el pedido vuelve a «Por confirmar · Swayp no entregó».
+  En los demás pedidos abre la guía Swayp de siempre.
+- Cuando deja de ser nuevo (pasan las 48 h, se confirma, sale otra guía o
+  Swayp se queda sin stock de algún producto), todo vuelve a como estaba:
+  Aliclik primero (Fase 3) y el botón de §11.11 debajo de las llamadas.
+
+No cambia ningún estado ni la versión del resolvedor: es el orden y la
+sugerencia de las opciones. Pruebas en `test/swayp-primero.test.ts`.
+
 ## 12. Agencia: Shalom y Olva
 
 ### Shalom
@@ -16356,6 +16396,8 @@ bloquea es la contradicción explícita.
   propio, Axel, Tanders, Urpi y Swayp.
 - Provincia COD recomienda Aliclik como primera salida; después de un resultado
   fallido prioriza Swayp cuando la ciudad y todos los productos tienen stock.
+  Desde el 27-11-2026, un pedido nuevo en Por confirmar con stock completo en
+  Swayp sugiere Swayp primero, desde Por confirmar (§11.14).
 - Reproprovincia abre la guía concreta en la cola existente; una salida Swayp
   directa valida nuevamente cobertura, stock, pedido y salidas activas.
 - Shalom continúa por su API directa y Olva se registra como salida de agencia;

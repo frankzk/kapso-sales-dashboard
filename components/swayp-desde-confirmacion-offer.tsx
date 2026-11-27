@@ -1,6 +1,7 @@
 "use client";
 
 import { OpsButton } from "@/components/ops-ui";
+import { SWAYP_PRIMERO_NOTE, SWAYP_PRIMERO_TITLE } from "@/lib/swayp-desde-confirmacion-offer";
 
 /**
  * «Enviar por Swayp» desde Por confirmar (MOM §11.11). Sale SIN confirmar, por
@@ -18,20 +19,34 @@ export function EnviarPorSwaypDesdeConfirmacion({
   pending,
   onOpen,
   className = "mt-3",
+  first = false,
 }: {
   pending: boolean;
   onOpen: () => void;
   className?: string;
+  /**
+   * Pedido nuevo con stock completo en Swayp (MOM §11.14): es la primera
+   * opción, va antes de las llamadas y con el botón principal.
+   */
+  first?: boolean;
 }) {
   return (
     <div className={`${className} flex flex-wrap items-center justify-between gap-3 rounded-lg bg-ok-wash p-4`}>
       <div className="min-w-0 flex-1 basis-56">
-        <p className="text-sm font-semibold text-ok-fg">Swayp lo puede llevar hoy</p>
+        <p className="text-sm font-semibold text-ok-fg">{first ? SWAYP_PRIMERO_TITLE : "Swayp lo puede llevar hoy"}</p>
         <p className="mt-0.5 text-[13px] leading-5 text-ink-700">
-          Sale sin confirmar. Si Swayp no lo entrega, el pedido vuelve a Por confirmar para llamarlo otra vez.
+          {first
+            ? SWAYP_PRIMERO_NOTE
+            : "Sale sin confirmar. Si Swayp no lo entrega, el pedido vuelve a Por confirmar para llamarlo otra vez."}
         </p>
       </div>
-      <OpsButton size="sm" disabled={pending} onClick={onOpen} className="pointer-coarse:h-11">
+      <OpsButton
+        size="sm"
+        variant={first ? "primary" : undefined}
+        disabled={pending}
+        onClick={onOpen}
+        className="pointer-coarse:h-11"
+      >
         Enviar por Swayp
       </OpsButton>
     </div>

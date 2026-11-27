@@ -15,6 +15,7 @@
 
 import { ORDER_COVERAGE_LABEL, type OrderCoverage } from "@/lib/order-coverage";
 import { SWAYP_AVAILABILITY_OPTIONS } from "@/lib/order-master-filters";
+import type { SwaypRouteCheck } from "@/lib/order-route-plan";
 
 export type SwaypAvailabilityValue = "ok" | "sin_stock" | "sin_cobertura";
 
@@ -51,4 +52,57 @@ export function swaypDesdeConfirmacionOffer(row: SwaypDesdeConfirmacionRow): Swa
     return { offered: false, reason: SWAYP_OFFER_REASON.notOk(label) };
   }
   return { offered: true };
+}
+
+// ---------------------------------------------------------------------------
+// Pedido nuevo: primero Swayp (MOM §11.14, owner 27-11-2026)
+// ---------------------------------------------------------------------------
+//
+// «queremos poner de primera opcion a los pedidos nuevos de cuando tenemos el
+// stock commpleto en Swayp, la opcion que es si no se entrega, regresa a "Por
+// confimar"» y «que se bloquee Aliclik como primera opcion para estos pedidos.
+// La idea es darle pedidos nuevos y limpios a Swayp». Con sus respuestas: nuevo
+// es la primera salida y 48 h o menos; Aliclik deja de ser la sugerencia pero
+// se puede elegir igual; lo envía la asesora con el botón «Enviar por Swayp».
+
+/** Hasta cuántas horas desde que se creó el pedido cuenta como nuevo. */
+export const SWAYP_PRIMERO_MAX_HOURS = 48;
+
+export const SWAYP_PRIMERO_TITLE = "Pedido nuevo: primero Swayp";
+export const SWAYP_PRIMERO_NOTE =
+  "Swayp tiene stock de todo el pedido. Sale sin confirmar; si Swayp no lo entrega, vuelve a Por confirmar para llamarlo y sacarlo por Aliclik.";
+// Los textos de las tarjetas de la Mesa de ruta viven en lib/order-route-plan.ts
+// (`SWAYP_PRIMERO_ROUTE_REASON`, `SWAYP_PRIMERO_ALICLIK_REASON`).
+
+/**
+ * ¿Es un pedido nuevo que sale primero por Swayp? Provincia COD en Por confirmar
+ * (no «Swayp no entregó»), sin ninguna salida todavía, creado hace 48 h o menos
+ * y con stock completo en Swayp: cobertura, todos sus productos vinculados y
+ * con stock (`swaypRouteCheck`, la misma lectura de la tarjeta de Swayp).
+ *
+ * El stock es el leído en la ficha, no `swayp_availability` del Master: esa
+ * aprueba con que UN producto tenga stock y se calcula cada hora, así que un
+ * pedido recién creado todavía no la tiene.
+ */
+export function swaypPrimero(input: {
+  row: Pick<SwaypDesdeConfirmacionRow, "macro_stage" | "macro_substage" | "coverage"> & {
+    order_created_at?: string | null;
+  };
+  outputs: number;
+  swayp: SwaypRouteCheck | null | undefined;
+  now: Date;
+}): boolean {
+  const { row, swayp } = input;
+  if (row.macro_stage !== "por_confirmar" || row.macro_substage === "swayp_no_entrego") return false;
+  if (row.coverage !== "provincia_cod") return false;
+  if (input.outputs > 0) return false;
+  const created = Date.parse(row.order_created_at ?? "");
+  if (!Number.isFinite(created)) return false;
+  if (input.now.getTime() - created > SWAYP_PRIMERO_MAX_HOURS * 60 * 60 * 1000) return false;
+  return (
+    !!swayp?.known &&
+    swayp.covered === true &&
+    swayp.stockOk === true &&
+    !(swayp.unlinked ?? []).some(Boolean)
+  );
 }
