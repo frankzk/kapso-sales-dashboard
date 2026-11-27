@@ -285,9 +285,9 @@ describe("los siete pasos suman el total (owner, 15-11-2026: «estos 5 no suman 
       if (c.step === "por_sacar") expect(c.agenda, r.orderId).not.toBeNull();
     }
     expect(counts.task).toEqual({ primer_despacho: 1, no_entregados: 3, novedad: 1, llamar_despues: 0, por_cerrar: 0 });
-    // Guía creada y En ruta suman «Con el courier» (la novedad f está en su paso); Retornando vive en No entregados.
-    expect(counts.courier).toEqual({ guia_creada: 1, en_ruta: 1, retornando: 1 });
-    expect(counts.courier.guia_creada + counts.courier.en_ruta).toBe(counts.step.con_courier);
+    // Guía creada, Asignado hoy (27-11-2026) y En ruta suman «Con el courier» (la novedad f está en su paso); Retornando vive en No entregados.
+    expect(counts.courier).toEqual({ guia_creada: 1, asignado_hoy: 0, en_ruta: 1, retornando: 1 });
+    expect(counts.courier.guia_creada + counts.courier.asignado_hoy + counts.courier.en_ruta).toBe(counts.step.con_courier);
     expect(limaBoardRows(rows, classes, "en_ruta").map((r) => r.orderId)).toEqual(["d"]);
     expect(limaBoardRows(rows, classes, "retornando").map((r) => r.orderId)).toEqual(["g"]);
     expect(classes.get("g")).toMatchObject({ step: "no_entregados", task: "no_entregados", courier: "retornando" });

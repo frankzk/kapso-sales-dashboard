@@ -94,10 +94,12 @@ describe("el motorizado asignado por GF Courier (owner, 17-11-2026)", () => {
     expect(parseGfAssigned("GF Courier: entregada.")).toBeNull();
     expect(parseGfAssigned(null)).toBeNull();
   });
-  it("solo cuenta la línea de la guía viva y, con asignado, ya no sugiere", () => {
+  it("solo cuenta los avisos de la guía viva (también la reprogramada en novedad) y, con asignado, ya no sugiere", () => {
     const access = read("lib/repro-lima-pending-access.ts");
-    expect(access).toContain('.ilike("note", "GF Courier: asignado a %")');
-    expect(access).toContain("guides.get(e.guide_code) !== e.order_id");
+    expect(access).toContain('.from("gf_webhook_events")');
+    expect(access).toContain('.in("type", ["order.status_changed", "order.returned_to_warehouse"])');
+    expect(access).toContain("const assigned = gfAssignedFromEvents(events);");
+    expect(access).toContain("loadGfAssigned(admin, new Map([...gfGuides, ...incidentGuides]))");
     expect(access).toContain("suggestedRiders: gfAssigned.has(row.order_id) ? null :");
     const ui = read("components/repro-lima-pending.tsx");
     expect(ui).toContain("Asignado: <span");

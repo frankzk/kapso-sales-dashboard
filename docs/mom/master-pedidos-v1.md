@@ -7018,7 +7018,8 @@ cambia la etapa del Master ni `MOM_RESOLUTION_VERSION`, y no necesita migración
   **Solo en Repro Lima**: el Master sigue En curso hasta que llegue el reporte
   o alguien lo registre, así no se pierde el rastro de la caja ni del efectivo.
   La novedad con la clienta y lo dado por entregado siguen su paso.
-- **Los filtros de adentro de «Con el courier»** (Guía creada, En ruta,
+- **Los filtros de adentro de «Con el courier»** (Guía creada, Asignado hoy
+  —desde el 27-11-2026, ver «Asignado hoy en Con el courier»—, En ruta,
   Retornando) cuentan solo lo que está en ese paso: suman su cifra. Una novedad
   o un no entregado con la guía viva ya no se cuentan ahí.
 - **Kapta propone, el equipo confirma** (`limaSuggestedDay`). A lo que falta
@@ -7689,10 +7690,46 @@ toca y «Guardar y pasar al siguiente» sigue el orden elegido.
 **El motorizado asignado (17-11-2026).** Cuando GF Courier ya asignó la guía
 viva, su aviso deja en el historial «GF Courier: asignado a Alexis para la ruta
 del 17/11.» (`lib/gf-webhook-note.ts`). La fila lo dice: **«Asignado: Alexis ·
-ruta del 17/11»** (`parseGfAssigned`), con la línea más reciente de ESA guía
-(la de una guía anterior no cuenta). Con asignado ya no hay «Sugerido»: en el
+ruta del 17/11»**. Con asignado ya no hay «Sugerido»: en el
 filtro «Motorizado sugerido» entra con el asignado. Es solo lectura: si la lectura falla, la fila no dice
 el asignado.
+
+**«Asignado hoy» en Con el courier (owner, 27-11-2026, #KP208991).** «No está
+identificando en la actividad que el paquete ya está asignado para hoy con
+Yordani… cuando ya esté asignado al motorizado en el estado de "por entregar" el
+día de hoy ya no estén en repro lima - programados, sino pase a repro lima - con
+el courier» → «sí, hazlo así». Reemplaza, para la ruta de hoy, la regla del
+19-11-2026 («asignado con día es Programados: asignación no es salida física»).
+- **De dónde sale el asignado.** Del último aviso de estado de ESA guía en
+  `gf_webhook_events` (`order.status_changed` u `order.returned_to_warehouse`,
+  `gfAssignedFromEvents` en `lib/lima-rider-suggest.ts`), ya no de la línea del
+  historial: si su etapa es asignado (`AWAITING_OFFICE_CHECK`) o cotejado
+  (`AWAITING_RIDER`), ese motorizado y el día de su ruta; si GF lo retiró de la
+  carga, ya salió o volvió al almacén, nadie. Se leen las guías GF vivas sin
+  salir y también la guía en novedad que GF vuelve a sacar (el reprogramado).
+- **GF avisa también la etapa del reprogramado (GF, migración 094).** El pedido
+  que volvió por «No contesta» sigue `INCIDENT` en GF hasta que vuelva a salir;
+  antes GF solo avisaba cuando cambiaba el estado, así que asignarlo hoy a otro
+  motorizado no llegaba a Kapta. Ahora llega `order.status_changed` con la etapa
+  (asignado, cotejado, retirado de la carga) y la Actividad dice «GF Courier:
+  asignado a Yordani Peña para la ruta del 27/11 — por Yelitza (GF).».
+- **La regla.** Con la guía GF asignada a un motorizado para la ruta de HOY, la
+  fila sale de Programados (o de Nuevos) y va a **Con el courier · «Asignado
+  hoy»**, entre «Guía creada» y «Recogido / en ruta» (`LIMA_COURIER_STATES`,
+  `classifyLimaRow`). Cuando el motorizado la recibe, GF la da en reparto y pasa
+  a «Recogido / en ruta» como siempre. Asignada para otro día (o de una ruta que
+  ya pasó), sigue en Programados con su día. Retirada de la carga o pasada a
+  mañana, vuelve a Programados. Llamar después, Novedad y Por cerrar siguen
+  mandando. Vale igual para la primera salida y para el reprogramado.
+- **En la fila.** «Hoy · Asignado a Yordani» y «GF Courier ya lo asignó a
+  Yordani para la ruta de hoy: sale cuando lo reciba. Solo seguimiento.». En el
+  desglose de Con el courier, «Estado del recojo» suma tres cifras: Guía creada,
+  Asignado hoy y Recogido / en ruta. «Programados · Hoy» queda con lo que todavía
+  falta asignar.
+- Es una etiqueta de pantalla, no un estado: no cambia la macroetapa ni
+  `MOM_RESOLUTION_VERSION`. Pruebas: `test/repro-lima-asignado-hoy.test.ts`,
+  `test/lima-daysi.test.ts`, `test/lima-block-details.test.ts` y
+  `test/lima-rider-suggest.test.ts`.
 
 **Lo que no hace.** No crea la guía de otro courier (Aliclik, Swayp y Axel siguen
 por la Mesa de ruta). No anula una guía asignada a un motorizado. No pide el
@@ -21383,7 +21420,9 @@ salir, en `status.sub_status` y en `stage`: por preparar (`CREATED:TO_PREPARE`),
 guía impresa (`READY_FOR_PICKUP:LABELED`), por asignar (`READY_FOR_PICKUP:AWAITING_ASSIGNMENT`), asignado con falta de
 cotejo (`AWAITING_OFFICE_CHECK`, con el motorizado) y falta que el motorizado lo reciba (`AWAITING_RIDER`). Kapta lo
 guarda en `reported_status`, lo muestra en «Salida activa» de la Mesa de ruta («En GF: por asignar a motorizado») y deja
-en el historial «GF Courier: asignado a Alexis para la ruta del 18/11». Si la clienta pide otro día y la guía viva
+en el historial «GF Courier: asignado a Alexis para la ruta del 18/11». Desde GF 094 (27-11-2026, #KP208991) GF avisa
+también cuando cambia la etapa de un pedido que sigue `INCIDENT` (el reprogramado asignado hoy, cotejado o retirado de
+la carga); Repro Lima lo usa para «Con el courier · Asignado hoy». Si la clienta pide otro día y la guía viva
 **todavía no tiene motorizado**, Kapta le cambia la fecha en GF (`POST /v1/orders/{tracking}/delivery-date`,
 `changeGfGuideDateFor`): misma guía, caja armada, sin anular ni rearmar. Si GF responde que ya está asignada, se dice
 y no se crea otra; si no puede por otra causa (reprogramación abierta), sigue el camino de anular y crear.

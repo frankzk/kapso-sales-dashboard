@@ -130,10 +130,12 @@ export interface LimaPendingOrder {
    */
   suggestedRiders?: string[] | null;
   /**
-   * El motorizado que GF Courier ya asignó a su guía viva, con el día de la ruta (`parseGfAssigned`): «Alexis ·
-   * ruta del 17/11». Con asignado no hay sugerencia. Sin guía GF viva o sin aviso de GF, null.
+   * El motorizado que GF Courier tiene asignado ahora a su guía viva, con el día de la ruta (`gfAssignedFromEvents`,
+   * su último aviso de estado): «Alexis · ruta del 17/11». Con asignado no hay sugerencia; asignado para la ruta de
+   * hoy, la fila va a «Con el courier · Asignado hoy» (owner, 27-11-2026). Sin guía GF viva, sin aviso de GF o ya
+   * retirado de la carga, null.
    */
-  gfAssigned?: { rider: string; day: string | null } | null;
+  gfAssigned?: { rider: string; day: string | null; routeDate?: string | null } | null;
   /**
    * El detalle de su courier vigente (owner, 08-11-2026: «no me das grupo gf
    * alexis o aliclik autoecom»): el motorizado de su última caja de Grupo GF, o

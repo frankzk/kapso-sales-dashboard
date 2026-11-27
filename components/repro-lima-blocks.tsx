@@ -113,12 +113,13 @@ const INSIDE: Partial<Record<LimaStep, { keys: readonly LimaBoardKey[]; note: (c
     ]),
   },
   con_courier: {
-    keys: ["guia_creada", "en_ruta"],
-    // La fecha de la ruta (owner, 15-11-2026): cuántos salieron hoy y cuántos son de la ruta anterior.
+    keys: ["guia_creada", "asignado_hoy", "en_ruta"],
+    // La fecha de la ruta (owner, 15-11-2026): cuántos salieron hoy y cuántos son de la ruta anterior. Los que GF ya
+    // asignó a un motorizado para hoy van aparte (owner, 27-11-2026).
     note: (c) => {
       const antes = c.courier.en_ruta - c.enRutaHoy;
       const ruta = [c.enRutaHoy ? `${fmt(c.enRutaHoy)} hoy` : null, antes ? `${fmt(antes)} anterior` : null].filter(Boolean).join(" · ");
-      const parts = [ruta ? `Recogido / en ruta: ${ruta}` : null, c.courier.guia_creada ? `${fmt(c.courier.guia_creada)} pendientes de recojo` : null].filter(Boolean);
+      const parts = [ruta ? `Recogido / en ruta: ${ruta}` : null, c.courier.asignado_hoy ? `${fmt(c.courier.asignado_hoy)} ${c.courier.asignado_hoy === 1 ? "asignado" : "asignados"} hoy` : null, c.courier.guia_creada ? `${fmt(c.courier.guia_creada)} pendientes de recojo` : null].filter(Boolean);
       return parts.length ? parts.join(" · ") : null;
     },
   },
