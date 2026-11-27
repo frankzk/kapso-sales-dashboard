@@ -28,7 +28,7 @@ function org(over: Partial<ResendOrgView> = {}): ResendOrgView {
     keyUpdatedAt: "2026-11-25T15:00:00Z",
     canExport: true,
     stores: [
-      { id: "s-kenku", name: "Kenku Peru", counts: { "6m": 5724, "12m": 11532, todos: 42903 }, topicReady: true, segmentsReady: ["6m", "12m", "todos"] },
+      { id: "s-kenku", name: "Kenku Peru", counts: { "6m": 5724, "9m": 9188, "12m": 11532, todos: 42903 }, topicReady: true, segmentsReady: ["6m", "12m", "todos"] },
     ],
     imports: [
       {
@@ -55,6 +55,8 @@ describe("ResendPanel", () => {
     expect(html).toContain("re_…a1b2");
     expect(html).toContain("Conectado");
     expect(html).toContain("Pidieron en los últimos 6 meses");
+    expect(html).toContain("Pidieron en los últimos 9 meses");
+    expect(html).toContain((9188).toLocaleString("es-PE"));
     expect(html).toContain("Pidieron en los últimos 12 meses");
     expect(html).toContain("Todos los que aceptan publicidad");
     expect(html).toContain((5724).toLocaleString("es-PE"));
@@ -69,14 +71,14 @@ describe("ResendPanel", () => {
     expect(html).toContain("Sin conectar");
     expect(html).toContain("Primero guarda la clave de Resend.");
     expect(html).not.toContain("Quitar clave");
-    expect(html.match(/<button[^>]*disabled=""[^>]*>Subir a Resend/g)).toHaveLength(3);
+    expect(html.match(/<button[^>]*disabled=""[^>]*>Subir a Resend/g)).toHaveLength(4);
   });
 
   it("sin `data.export`, no hay subir ni descargar", () => {
     const html = render([org({ canExport: false })]);
     expect(html).toContain("Descargar la base de pedidos");
     expect(html).not.toContain("Descargar CSV");
-    expect(html.match(/<button[^>]*disabled=""[^>]*>Subir a Resend/g)).toHaveLength(3);
+    expect(html.match(/<button[^>]*disabled=""[^>]*>Subir a Resend/g)).toHaveLength(4);
   });
 
   it("fuera de producción avisa y no deja guardar", () => {

@@ -8,7 +8,7 @@
 
 import { toCsv } from "@/lib/csv";
 
-export type ResendBucket = "6m" | "12m" | "todos";
+export type ResendBucket = "6m" | "9m" | "12m" | "todos";
 
 export interface ResendBucketInfo {
   key: ResendBucket;
@@ -21,8 +21,8 @@ export interface ResendBucketInfo {
 }
 
 /**
- * Los tramos, del más chico al más grande. Se suman: el de 12 meses trae
- * también a los de 6, y «todos» a los dos. Se sube primero el de 6 meses: el
+ * Los tramos, del más chico al más grande. Se suman: cada uno trae también a
+ * los de los tramos anteriores, y «todos» a todos. Se sube primero el de 6 meses: el
  * dominio nuevo calienta con quien compró hace poco y abre más.
  */
 export const RESEND_BUCKETS: readonly ResendBucketInfo[] = [
@@ -32,6 +32,15 @@ export const RESEND_BUCKETS: readonly ResendBucketInfo[] = [
     label: "Pidieron en los últimos 6 meses",
     segment: "pidieron en 6 meses",
     help: "Empieza por aquí: es la lista que más abre.",
+  },
+  {
+    // Owner, 27-11-2026: el plan de Resend de Kenku es de 10.000 contactos; 9
+    // meses son unos 9.200 y 10 meses ya pasan (MOM §46.2).
+    key: "9m",
+    months: 9,
+    label: "Pidieron en los últimos 9 meses",
+    segment: "pidieron en 9 meses",
+    help: "Incluye a los de 6 meses. Cabe en un plan de 10.000 contactos.",
   },
   {
     key: "12m",
@@ -50,7 +59,7 @@ export const RESEND_BUCKETS: readonly ResendBucketInfo[] = [
 ];
 
 export function isResendBucket(value: unknown): value is ResendBucket {
-  return value === "6m" || value === "12m" || value === "todos";
+  return value === "6m" || value === "9m" || value === "12m" || value === "todos";
 }
 
 export function resendBucket(key: ResendBucket): ResendBucketInfo {

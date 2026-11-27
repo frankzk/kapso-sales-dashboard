@@ -30206,7 +30206,8 @@ cancelados Kenku bajaba de 11.532 a 7.972 en 12 meses):
 | Tramo | Quiénes | Segmento en Resend |
 |---|---|---|
 | `6m` | pidieron en los últimos 6 meses | «<Tienda> · pidieron en 6 meses» |
-| `12m` | pidieron en los últimos 12 meses (incluye los de 6) | «<Tienda> · pidieron en 12 meses» |
+| `9m` | pidieron en los últimos 9 meses (incluye los de 6) | «<Tienda> · pidieron en 9 meses» |
+| `12m` | pidieron en los últimos 12 meses (incluye los de 6 y 9) | «<Tienda> · pidieron en 12 meses» |
 | `todos` | todos los que aceptan publicidad (incluye los dos) | «<Tienda> · todos los suscritos» |
 
 Cifras al 25-11-2026 (sin dominios mal escritos): Kenku Peru 5.724 / 11.532 /
@@ -30215,6 +30216,12 @@ está en «todos».
 
 Se sube primero el de 6 meses: un dominio nuevo calienta con quien abre. La
 pantalla lo marca «Primero» y su botón es el principal.
+
+**9 meses (owner, 27-11-2026; 0357).** El plan de Resend de Kenku es de 10.000
+contactos y se pidió el tramo que lo llene sin pasarse: al 27-11 Kenku tiene
+9.188 en 9 meses y 10.140 en 10. Subir el de 6 y el de 9 no cobra dos veces:
+Resend cuenta cada correo una sola vez. Las cifras bajan con los días porque el
+historial de Shopify es del 27-10: un tramo de «N meses» es siempre desde hoy.
 
 ### 46.3 Qué correos no se suben
 
@@ -30308,3 +30315,4 @@ Código: `lib/resend-marketing.ts` (puro), `lib/resend-client.ts` (la API, con
 `app/dashboard/automatizaciones/correo/` y `components/resend-panel.tsx`.
 Pruebas: `test/resend-marketing.test.ts`,
 `test/resend-marketing-server.test.ts` y `test/resend-panel-render.test.ts`.
+Migraciones: 0355 y 0357 (tramo de 9 meses).

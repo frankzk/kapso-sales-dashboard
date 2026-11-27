@@ -12,7 +12,7 @@ export const maxDuration = 120;
 // «Descargar CSV» de Correo · Resend (MOM §46): el mismo archivo que Kapta sube
 // a Resend, para cargarlo a mano o guardarlo. Pide `automations.manage` y
 // `data.export` en la organización de la tienda, y que la tienda se vea.
-//   /dashboard/automatizaciones/correo/csv?store=<id>&bucket=6m|12m|todos
+//   /dashboard/automatizaciones/correo/csv?store=<id>&bucket=6m|9m|12m|todos
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
   const storeId = sp.get("store") ?? "";

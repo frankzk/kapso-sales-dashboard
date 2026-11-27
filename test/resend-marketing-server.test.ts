@@ -199,6 +199,16 @@ describe("importResendBucket", () => {
     expect(r.calls).toHaveLength(0);
   });
 
+  it("el tramo de 9 meses pide 9 meses y va a su propio segmento", async () => {
+    h.exportRows = [{ email: "ana@gmail.com", first_name: "Ana", last_name: null, last_order_at: "2026-04-01T00:00:00Z", orders: 1 }];
+    const r = fakeResend({ topics: [], segments: [] });
+    const res = await importResendBucket({ orgId: "org1", store: KENKU, bucket: "9m", userId: "u1", day: "2026-11-27" }, r.impl);
+    expect(res.ok).toBe(true);
+    expect(h.rpcCalls[0]!.args.p_months).toBe(9);
+    expect(r.state.segments.map((s) => s.name)).toEqual(["Kenku Peru · pidieron en 9 meses"]);
+    expect(h.imports[0]).toEqual(expect.objectContaining({ bucket: "9m" }));
+  });
+
   it("un tramo vacío no se sube", async () => {
     h.exportRows = [];
     const r = fakeResend({ topics: [], segments: [] });

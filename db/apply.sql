@@ -713,4 +713,6 @@
 \ir migrations/0355_resend_marketing.sql
 \echo 'Applying 0356_aliclik_followup_no_touch.sql'
 \ir migrations/0356_aliclik_followup_no_touch.sql
+\echo 'Applying 0357_resend_9_meses.sql'
+\ir migrations/0357_resend_9_meses.sql
 \echo 'Done.'
