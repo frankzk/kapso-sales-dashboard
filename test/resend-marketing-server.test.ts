@@ -94,9 +94,9 @@ beforeEach(() => {
 });
 
 describe("ensureResendSetup", () => {
-  it("crea el tema de la tienda y sus tres segmentos, y guarda los ids", async () => {
+  it("con los tres tramos pedidos, crea el tema y los tres segmentos, y guarda los ids", async () => {
     const r = fakeResend({ topics: [], segments: [] });
-    const res = await ensureResendSetup(fakeAdmin() as never, "org1", "re_secret_key_123456", [KENKU], r.impl);
+    const res = await ensureResendSetup(fakeAdmin() as never, "org1", "re_secret_key_123456", [KENKU], ["6m", "12m", "todos"], r.impl);
     expect(res.ok).toBe(true);
     expect(r.state.topics.map((t) => t.name)).toEqual(["Kenku Peru"]);
     expect(r.state.segments.map((s) => s.name)).toEqual([
@@ -114,32 +114,57 @@ describe("ensureResendSetup", () => {
 
   it("la segunda vez no crea nada: usa los ids guardados o los del mismo nombre", async () => {
     const r = fakeResend({ topics: [], segments: [] });
-    await ensureResendSetup(fakeAdmin() as never, "org1", "k", [KENKU], r.impl);
+    await ensureResendSetup(fakeAdmin() as never, "org1", "k", [KENKU], ["6m", "12m", "todos"], r.impl);
     const posts = () => r.calls.filter((c) => c.method === "POST").length;
     const before = posts();
-    const again = await ensureResendSetup(fakeAdmin() as never, "org1", "k", [KENKU], r.impl);
+    const again = await ensureResendSetup(fakeAdmin() as never, "org1", "k", [KENKU], ["6m", "12m", "todos"], r.impl);
     expect(posts()).toBe(before);
     expect(again.ok && again.value.created).toBe(0);
 
     // Sin ids guardados (otra organización, o se borraron en Kapta): los encuentra por nombre.
     h.settings = { ...h.settings!, topics: {}, segments: {} };
-    const byName = await ensureResendSetup(fakeAdmin() as never, "org1", "k", [KENKU], r.impl);
+    const byName = await ensureResendSetup(fakeAdmin() as never, "org1", "k", [KENKU], ["6m", "12m", "todos"], r.impl);
     expect(posts()).toBe(before);
     expect(byName.ok && byName.value.created).toBe(0);
   });
 
   it("si un segmento se borró en Resend, lo vuelve a crear", async () => {
     const r = fakeResend({ topics: [], segments: [] });
-    await ensureResendSetup(fakeAdmin() as never, "org1", "k", [KENKU], r.impl);
+    await ensureResendSetup(fakeAdmin() as never, "org1", "k", [KENKU], ["6m", "12m", "todos"], r.impl);
     r.state.segments.splice(0, 1);
-    const res = await ensureResendSetup(fakeAdmin() as never, "org1", "k", [KENKU], r.impl);
+    const res = await ensureResendSetup(fakeAdmin() as never, "org1", "k", [KENKU], ["6m", "12m", "todos"], r.impl);
     expect(res.ok && res.value.created).toBe(1);
     expect(r.state.segments.map((s) => s.name)).toContain("Kenku Peru · pidieron en 6 meses");
   });
 
+  it("sin tramos pedidos solo crea el tema: ningún segmento", async () => {
+    const r = fakeResend({ topics: [], segments: [] });
+    const res = await ensureResendSetup(fakeAdmin() as never, "org1", "k", [KENKU], [], r.impl);
+    expect(res.ok && res.value.created).toBe(1);
+    expect(r.state.segments).toHaveLength(0);
+    expect(r.calls.some((c) => c.url.includes("/segments"))).toBe(false);
+  });
+
+  it("con el tope de segmentos del plan, guarda lo que alcanzó a crear y explica el tope", async () => {
+    const r = fakeResend({ topics: [], segments: [{ id: "otro1", name: "General" }, { id: "otro2", name: "Otra" }] });
+    const base = r.impl;
+    let segmentPosts = 0;
+    const impl = (async (url: string, init: RequestInit) => {
+      if ((init.method ?? "GET") === "POST" && url.endsWith("/segments") && ++segmentPosts > 1) {
+        return new Response(JSON.stringify({ name: "validation_error", message: "Your plan includes 3 segments. Upgrade to add more." }), { status: 422 });
+      }
+      return base(url, init);
+    }) as unknown as typeof fetch;
+    const res = await ensureResendSetup(fakeAdmin() as never, "org1", "k", [KENKU], ["6m", "12m"], impl);
+    expect(res).toEqual({ ok: false, error: expect.stringMatching(/permite solo 3 segmentos/) });
+    // El tema y el segmento de 6 meses sí se crearon: quedan guardados.
+    expect((h.settings!.topics as Record<string, string>)["store-kenku"]).toBeTruthy();
+    expect(Object.keys(h.settings!.segments as Record<string, string>)).toEqual(["store-kenku:6m"]);
+  });
+
   it("con una clave de solo envío, para y lo explica", async () => {
     const impl = (async () => new Response(JSON.stringify({ name: "restricted_api_key", message: "x" }), { status: 401 })) as unknown as typeof fetch;
-    const res = await ensureResendSetup(fakeAdmin() as never, "org1", "k", [KENKU], impl);
+    const res = await ensureResendSetup(fakeAdmin() as never, "org1", "k", [KENKU], ["6m", "12m", "todos"], impl);
     expect(res).toEqual({ ok: false, error: expect.stringMatching(/solo de envío/) });
   });
 });
@@ -153,6 +178,8 @@ describe("importResendBucket", () => {
     const r = fakeResend({ topics: [], segments: [] });
     const res = await importResendBucket({ orgId: "org1", store: KENKU, bucket: "6m", userId: "u1", day: "2026-11-25" }, r.impl);
     expect(res).toEqual({ ok: true, value: { rows: 1, excluded: 1 } });
+    // Solo el segmento del tramo que se sube.
+    expect(r.state.segments.map((s) => s.name)).toEqual(["Kenku Peru · pidieron en 6 meses"]);
     expect(h.rpcCalls[0]).toEqual({ fn: "resend_marketing_export", args: { p_store: "store-kenku", p_months: 6, p_exclude_domains: [] } });
     const imp = r.calls.find((c) => c.url.endsWith("/contacts/imports"))!;
     const form = imp.body as FormData;

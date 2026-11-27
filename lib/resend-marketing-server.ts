@@ -29,6 +29,7 @@ import {
   type ResendContact,
   type ResendContactRow,
   type ResendImportStatus,
+  type ResendApiError,
 } from "@/lib/resend-marketing";
 import {
   createResendContactImport,
@@ -252,21 +253,28 @@ export async function resendKeyFor(admin: SupabaseClient, orgId: string): Promis
 export type ResendStepResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
 /**
- * Deja en Resend el tema de cada tienda y sus tres segmentos. Idempotente: usa
- * el id guardado si sigue existiendo, si no el que tenga el mismo nombre, y
- * solo crea lo que falta. Guarda los ids en `resend_settings`.
+ * Deja en Resend lo que hace falta, y nada más (26-11-2026: el plan gratis de
+ * Resend permite 3 segmentos y Kapta pedía 6 de golpe):
+ * - el tema de cada tienda de `stores`;
+ * - solo los segmentos de `buckets` (tienda y tramo): uno se crea recién
+ *   cuando se sube ese tramo, no al guardar la clave.
+ * Idempotente: usa el id guardado si sigue existiendo, si no el del mismo
+ * nombre, y solo crea lo que falta. Lo que alcanzó a crear se guarda en
+ * `resend_settings` aunque Resend rechace el siguiente; si no, la próxima vez
+ * lo encuentra por nombre igual, pero Kapta mostraba «Sin crear».
  */
 export async function ensureResendSetup(
   admin: SupabaseClient,
   orgId: string,
   key: string,
   stores: readonly { id: string; name: string }[],
+  buckets: readonly ResendBucket[] = [],
   fetchImpl: ResendFetch = fetch,
 ): Promise<ResendStepResult<{ topics: Record<string, string>; segments: Record<string, string>; created: number }>> {
   const [{ data: row }, topicsRes, segmentsRes] = await Promise.all([
     admin.from("resend_settings").select("topics, segments").eq("org_id", orgId).maybeSingle(),
     listResendTopics(key, fetchImpl),
-    listResendSegments(key, fetchImpl),
+    buckets.length ? listResendSegments(key, fetchImpl) : Promise.resolve({ ok: true as const, data: [] }),
   ]);
   if (!topicsRes.ok) return { ok: false, error: resendErrorMessage(topicsRes.error) };
   if (!segmentsRes.ok) return { ok: false, error: resendErrorMessage(segmentsRes.error) };
@@ -278,40 +286,50 @@ export async function ensureResendSetup(
   const topicByName = new Map(topicsRes.data.map((t) => [t.name.trim().toLowerCase(), t.id]));
   const segmentByName = new Map(segmentsRes.data.map((s) => [s.name.trim().toLowerCase(), s.id]));
   let created = 0;
-  // En serie: Resend deja 10 llamadas por segundo y son pocas (4 por tienda).
+
+  const persist = async () => {
+    const merged = {
+      topics: { ...(saved.topics ?? {}), ...topics },
+      segments: { ...(saved.segments ?? {}), ...segments },
+    };
+    await admin
+      .from("resend_settings")
+      .update({ ...merged, updated_at: new Date().toISOString() })
+      .eq("org_id", orgId);
+    return merged;
+  };
+  const fail = async (error: ResendApiError): Promise<ResendStepResult<never>> => {
+    if (created) await persist();
+    return { ok: false, error: resendErrorMessage(error) };
+  };
+
+  // En serie: Resend deja 10 llamadas por segundo y son pocas.
   for (const store of stores) {
     const topicName = resendTopicName(store.name);
     const savedTopic = saved.topics?.[store.id];
     let topicId = savedTopic && topicIds.has(savedTopic) ? savedTopic : topicByName.get(topicName.toLowerCase());
     if (!topicId) {
       const res = await createResendTopic(key, topicName, resendTopicDescription(store.name), fetchImpl);
-      if (!res.ok) return { ok: false, error: resendErrorMessage(res.error) };
+      if (!res.ok) return fail(res.error);
       topicId = res.data.id;
       created += 1;
     }
     topics[store.id] = topicId;
-    for (const bucket of RESEND_BUCKETS) {
-      const segKey = resendSegmentKey(store.id, bucket.key);
-      const name = resendSegmentName(store.name, bucket.key);
+    for (const bucket of buckets) {
+      const segKey = resendSegmentKey(store.id, bucket);
+      const name = resendSegmentName(store.name, bucket);
       const savedSeg = saved.segments?.[segKey];
       let segmentId = savedSeg && segmentIds.has(savedSeg) ? savedSeg : segmentByName.get(name.toLowerCase());
       if (!segmentId) {
         const res = await createResendSegment(key, name, fetchImpl);
-        if (!res.ok) return { ok: false, error: resendErrorMessage(res.error) };
+        if (!res.ok) return fail(res.error);
         segmentId = res.data.id;
         created += 1;
       }
       segments[segKey] = segmentId;
     }
   }
-  const merged = {
-    topics: { ...(saved.topics ?? {}), ...topics },
-    segments: { ...(saved.segments ?? {}), ...segments },
-  };
-  await admin
-    .from("resend_settings")
-    .update({ ...merged, updated_at: new Date().toISOString() })
-    .eq("org_id", orgId);
+  const merged = await persist();
   return { ok: true, value: { ...merged, created } };
 }
 
@@ -344,7 +362,7 @@ export async function importResendBucket(
   const admin = createAdminSupabase();
   const key = await resendKeyFor(admin, input.orgId);
   if (!key) return { ok: false, error: "Primero guarda la clave de Resend." };
-  const setup = await ensureResendSetup(admin, input.orgId, key, [input.store], fetchImpl);
+  const setup = await ensureResendSetup(admin, input.orgId, key, [input.store], [input.bucket], fetchImpl);
   if (!setup.ok) return setup;
   const segmentId = setup.value.segments[resendSegmentKey(input.store.id, input.bucket)];
   if (!segmentId) return { ok: false, error: "No encontramos el segmento en Resend. Vuelve a intentarlo." };

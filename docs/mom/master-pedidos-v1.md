@@ -30234,10 +30234,20 @@ fórmula).
   recibiendo Aurela.
 - **Tres segmentos por tienda**, uno por tramo (§46.2). Son estáticos: un
   contacto queda en el segmento al que se subió.
-- Se crean al guardar la clave y, si falta alguno, antes de cada subida
-  (`ensureResendSetup`). No se duplican: Kapta usa el id que guardó si sigue en
-  Resend, si no el del mismo nombre, y solo crea lo que falta. Los ids quedan en
-  `resend_settings.topics` (por tienda) y `.segments` (`<tienda>:<tramo>`).
+- **Se crean recién al subir** (26-11-2026): el tema de una tienda y el
+  segmento de un tramo nacen con la primera subida de ese tramo
+  (`ensureResendSetup` con la tienda y el tramo). Guardar la clave no crea nada.
+  Antes Kapta creaba los 6 segmentos al guardar la clave, y el plan gratis de
+  Resend permite 3: Aurela ocupó el cupo y Kenku quedó sin segmentos. Además,
+  el owner decidió sincronizar **solo Kenku**; una tienda que no se sube no
+  ocupa nada en Resend.
+- No se duplican: Kapta usa el id que guardó si sigue en Resend, si no el del
+  mismo nombre, y solo crea lo que falta. Lo que alcanzó a crear se guarda
+  aunque Resend rechace lo siguiente. Los ids quedan en `resend_settings.topics`
+  (por tienda) y `.segments` (`<tienda>:<tramo>`).
+- **Tope del plan**: si Resend contesta «Your plan includes N segments», Kapta
+  dice «Tu plan de Resend permite solo N segmentos y ya están usados» y pide
+  borrar en Resend (Audience › Segments) los que no se usan o subir de plan.
 
 ### 46.5 La subida
 
